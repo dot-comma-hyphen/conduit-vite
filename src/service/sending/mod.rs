@@ -95,7 +95,7 @@ pub struct Service {
 }
 
 enum TransactionStatus {
-    Running,
+    Running(Vec<SendingEventType>),
     Failed(u32, Instant), // number of times failed, time of last failure
     Retrying(u32),        // number of times failed
 }
@@ -146,7 +146,7 @@ impl Service {
         }
 
         for (outgoing_kind, events) in initial_transactions {
-            current_transaction_status.insert(outgoing_kind.clone(), TransactionStatus::Running);
+            current_transaction_status.insert(outgoing_kind.clone(), TransactionStatus::Running(Vec::new()));
             futures.push(Self::handle_events(outgoing_kind.clone(), events));
         }
 
@@ -157,26 +157,46 @@ impl Service {
                         Ok(outgoing_kind) => {
                             self.db.delete_all_active_requests_for(&outgoing_kind)?;
 
-                            // Find events that have been added since starting the last request
-                            let new_events = self.db.queued_requests(&outgoing_kind).filter_map(|r| r.ok()).take(30).collect::<Vec<_>>();
+                            // 1. Get events that were queued in memory while the last transaction was running.
+                            let mut pending_events: Vec<SendingEventType> = if let Some(TransactionStatus::Running(events)) = current_transaction_status.get_mut(&outgoing_kind) {
+                                if !events.is_empty() {
+                                    std::mem::take(events)
+                                } else {
+                                    Vec::new()
+                                }
+                            } else {
+                                Vec::new()
+                            };
 
-                            if !new_events.is_empty() {
-                                // Insert pdus we found
-                                self.db.mark_as_active(&new_events)?;
+                            // 2. Get events from the database queue.
+                            let new_db_events = self.db.queued_requests(&outgoing_kind)
+                                .filter_map(|r| r.ok())
+                                .take(30) // Limit batch size
+                                .collect::<Vec<_>>();
 
+                            if !new_db_events.is_empty() {
+                                self.db.mark_as_active(&new_db_events)?;
+                                pending_events.extend(new_db_events.into_iter().map(|(event, _key)| event));
+                            }
+
+                            // 3. If we have any events to send, start a new transaction.
+                            if !pending_events.is_empty() {
+                                // Set the status to Running with an empty vec, because all pending events are now in the new transaction.
+                                current_transaction_status.insert(outgoing_kind.clone(), TransactionStatus::Running(Vec::new()));
                                 futures.push(
                                     Self::handle_events(
                                         outgoing_kind.clone(),
-                                        new_events.into_iter().map(|(event, _)| event).collect(),
+                                        pending_events,
                                     )
                                 );
                             } else {
+                                // No more events for this destination.
                                 current_transaction_status.remove(&outgoing_kind);
                             }
                         }
                         Err((outgoing_kind, _)) => {
                             current_transaction_status.entry(outgoing_kind).and_modify(|e| *e = match e {
-                                TransactionStatus::Running => TransactionStatus::Failed(1, Instant::now()),
+                                TransactionStatus::Running(_) => TransactionStatus::Failed(1, Instant::now()),
                                 TransactionStatus::Retrying(n) => TransactionStatus::Failed(*n+1, Instant::now()),
                                 TransactionStatus::Failed(_, _) => {
                                     error!("Request that was not even running failed?!");
@@ -213,8 +233,13 @@ impl Service {
 
         entry
             .and_modify(|e| match e {
-                TransactionStatus::Running | TransactionStatus::Retrying(_) => {
-                    allow = false; // already running
+                TransactionStatus::Running(ref mut edus) => {
+					debug!("Request for {:?} already running. Adding new events to queue.", outgoing_kind);
+					edus.extend(new_events.clone().into_iter().map(|(e, _)| e));
+					allow = false;
+                }
+                TransactionStatus::Retrying(_) => {
+                    debug!("Request for {:?} already running. Allowing new request to proceed.", outgoing_kind);
                 }
                 TransactionStatus::Failed(tries, time) => {
                     // Fail if a request has failed recently (exponential backoff)
@@ -231,7 +256,10 @@ impl Service {
                     }
                 }
             })
-            .or_insert(TransactionStatus::Running);
+            .or_insert_with(|| {
+                debug!("Starting new request for {:?}", outgoing_kind);
+                TransactionStatus::Running(Vec::new())
+            });
 
         if !allow {
             return Ok(None);
@@ -719,5 +747,119 @@ impl Service {
         drop(permit);
 
         response
+    }
+
+    fn send_federation_edu<I: Iterator<Item = OwnedServerName>>(
+        &self,
+        servers: I,
+        edu: Edu,
+    ) -> Result<()> {
+        let serialized_edu = serde_json::to_vec(&edu).expect("json can be serialized");
+
+        let requests = servers
+            .into_iter()
+            .map(|server| {
+                (
+                    OutgoingKind::Normal(server),
+                    SendingEventType::Edu(serialized_edu.clone()),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let keys = self.db.queue_requests(
+            &requests
+                .iter()
+                .map(|(o, e)| (o, e.clone()))
+                .collect::<Vec<_>>(),
+        )?;
+
+        for ((outgoing_kind, event), key) in requests.into_iter().zip(keys) {
+            self.sender
+                .send((outgoing_kind.to_owned(), event, key))
+                .unwrap();
+        }
+
+        Ok(())
+    }
+
+    fn get_servers_in_room(&self, room_id: &ruma::RoomId) -> Result<HashSet<OwnedServerName>> {
+        let mut servers: HashSet<OwnedServerName> = services()
+            .rooms
+            .state_cache
+            .room_servers(room_id)
+            .filter_map(|r| r.ok())
+            .collect();
+
+        servers.remove(services().globals.server_name());
+
+        Ok(servers)
+    }
+
+    #[tracing::instrument(skip(self, user_id, room_id, typing))]
+    pub fn send_federation_typing_edu(
+        &self,
+        user_id: &UserId,
+        room_id: &ruma::RoomId,
+        typing: bool,
+    ) -> Result<()> {
+        let servers = self.get_servers_in_room(room_id)?;
+
+        if servers.is_empty() {
+            return Ok(());
+        }
+
+        self.send_federation_edu(
+            servers.into_iter(),
+            Edu::Typing(federation::transactions::edu::TypingContent {
+                room_id: room_id.to_owned(),
+                user_id: user_id.to_owned(),
+                typing,
+            }),
+        )
+    }
+
+    #[tracing::instrument(skip(self, user_id, room_id, event))]
+    pub fn send_federation_receipt_edu(
+        &self,
+        user_id: &UserId,
+        room_id: &ruma::RoomId,
+        event: ruma::events::receipt::ReceiptEvent,
+    ) -> Result<()> {
+        let servers = self.get_servers_in_room(room_id)?;
+
+        if servers.is_empty() {
+            return Ok(());
+        }
+
+        let mut read = BTreeMap::new();
+        let (event_id, mut receipt) = event
+            .content
+            .0
+            .into_iter()
+            .next()
+            .expect("we only use one event per read receipt");
+        let receipt = receipt
+            .remove(&ReceiptType::Read)
+            .expect("our read receipts always set this")
+            .remove(user_id)
+            .expect("our read receipts always have the user here");
+
+        read.insert(
+            user_id.to_owned(),
+            ReceiptData {
+                data: receipt,
+                event_ids: vec![event_id],
+            },
+        );
+
+        let receipt_map = ReceiptMap { read };
+
+        let mut receipts = BTreeMap::new();
+        receipts.insert(room_id.to_owned(), receipt_map);
+
+        self.send_federation_edu(
+            servers.into_iter(),
+            Edu::Receipt(ReceiptContent { receipts }),
+        )
     }
 }

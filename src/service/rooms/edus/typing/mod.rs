@@ -25,6 +25,11 @@ impl Service {
             .await
             .insert(room_id.to_owned(), services().globals.next_count()?);
         let _ = self.typing_update_sender.send(room_id.to_owned());
+
+        services()
+            .sending
+            .send_federation_typing_edu(user_id, room_id, true)?;
+
         Ok(())
     }
 
@@ -41,6 +46,11 @@ impl Service {
             .await
             .insert(room_id.to_owned(), services().globals.next_count()?);
         let _ = self.typing_update_sender.send(room_id.to_owned());
+
+        services()
+            .sending
+            .send_federation_typing_edu(user_id, room_id, false)?;
+
         Ok(())
     }
 
@@ -76,6 +86,7 @@ impl Service {
             let room = typing.entry(room_id.to_owned()).or_default();
             for user in removable {
                 room.remove(&user);
+                services().sending.send_federation_typing_edu(&user, room_id, false)?;
             }
             self.last_typing_update
                 .write()
