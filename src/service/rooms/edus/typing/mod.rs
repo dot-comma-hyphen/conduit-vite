@@ -116,7 +116,7 @@ impl Service {
     pub async fn typings_maintain_task() {
         loop {
             services().rooms.edus.typing.typings_maintain_all().await.ok();
-            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         }
     }
 
