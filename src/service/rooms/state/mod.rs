@@ -90,7 +90,7 @@ impl Service {
                         membership,
                         &pdu.sender,
                         None,
-                        false,
+                        true,
                     )?;
                 }
                 TimelineEventType::SpaceChild => {

@@ -97,6 +97,29 @@ impl Service {
         Ok(())
     }
 
+    async fn typings_maintain_all(&self) -> Result<()> {
+        let mut rooms = Vec::new();
+        {
+            let typing = self.typing.read().await;
+            for room in typing.keys() {
+                rooms.push(room.clone());
+            }
+        }
+
+        for room in rooms {
+            self.typings_maintain(&room).await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn typings_maintain_task() {
+        loop {
+            services().rooms.edus.typing.typings_maintain_all().await.ok();
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        }
+    }
+
     /// Returns the count of the last typing update in this room.
     pub async fn last_typing_update(&self, room_id: &RoomId) -> Result<u64> {
         self.typings_maintain(room_id).await?;

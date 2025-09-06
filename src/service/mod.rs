@@ -36,6 +36,7 @@ pub struct Services {
     pub key_backups: key_backups::Service,
     pub media: Arc<media::Service>,
     pub sending: Arc<sending::Service>,
+    pub typing: tokio::task::JoinHandle<()>,
 }
 
 impl Services {
@@ -122,6 +123,9 @@ impl Services {
             key_backups: key_backups::Service { db },
             media: Arc::new(media::Service { db }),
             sending: sending::Service::build(db, &config),
+            typing: tokio::spawn(
+                rooms::edus::typing::Service::typings_maintain_task()
+            ),
 
             globals: globals::Service::load(db, config)?,
         })
