@@ -122,6 +122,7 @@ impl Service {
         let mut receiver = self.receiver.lock().await;
 
         let mut futures = FuturesUnordered::new();
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
 
         let mut current_transaction_status = HashMap::<OutgoingKind, TransactionStatus>::new();
 
@@ -213,6 +214,33 @@ impl Service {
                         &mut current_transaction_status,
                     ).await {
                         futures.push(Self::handle_events(outgoing_kind, events));
+                    }
+                }
+                _ = interval.tick() => {
+                    let mut retry_destinations = Vec::new();
+                    for (outgoing_kind, status) in &current_transaction_status {
+                        if let TransactionStatus::Failed(tries, time) = status {
+                            // Retry if we failed
+                            let mut min_elapsed_duration = Duration::from_secs(30) * (*tries) * (*tries);
+                            if min_elapsed_duration > Duration::from_secs(60 * 60 * 24) {
+                                min_elapsed_duration = Duration::from_secs(60 * 60 * 24);
+                            }
+
+                            if time.elapsed() < min_elapsed_duration {
+                                continue;
+                            }
+                            retry_destinations.push(outgoing_kind.clone());
+                        }
+                    }
+
+                    for outgoing_kind in retry_destinations {
+                        if let Ok(Some(events)) = self.select_events(
+                            &outgoing_kind,
+                            vec![],
+                            &mut current_transaction_status,
+                        ).await {
+                            futures.push(Self::handle_events(outgoing_kind.clone(), events));
+                        }
                     }
                 }
             }
