@@ -285,6 +285,12 @@ impl Service {
             for (e, _) in new_events {
                 events.push(e);
             }
+
+            if let OutgoingKind::Normal(server_name) = outgoing_kind {
+                if let Ok(select_edus) = self.select_edus(server_name).await {
+                    events.extend(select_edus.into_iter().map(|edu| SendingEventType::Edu(serde_json::to_vec(&edu).unwrap())));
+                }
+            }
         }
 
         Ok(Some(events))
@@ -635,14 +641,6 @@ impl Service {
             OutgoingKind::Normal(server) => {
                 let mut edu_jsons = Vec::new();
                 let mut pdu_jsons = Vec::new();
-
-                if let Ok(select_edus) = services().sending.select_edus(server).await {
-                    edu_jsons.extend(
-                        select_edus
-                            .into_iter()
-                            .filter_map(|edu| serde_json::from_str(serde_json::to_string(&edu).unwrap().as_str()).ok()),
-                    );
-                }
 
                 for event in &events {
                     match event {
