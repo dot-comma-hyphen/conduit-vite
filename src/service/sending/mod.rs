@@ -211,7 +211,7 @@ impl Service {
                         &outgoing_kind,
                         vec![(event, key)],
                         &mut current_transaction_status,
-                    ) {
+                    ).await {
                         futures.push(Self::handle_events(outgoing_kind, events));
                     }
                 }
@@ -220,7 +220,7 @@ impl Service {
     }
 
     #[tracing::instrument(skip(self, outgoing_kind, new_events, current_transaction_status))]
-    fn select_events(
+    async fn select_events(
         &self,
         outgoing_kind: &OutgoingKind,
         new_events: Vec<(SendingEventType, Vec<u8>)>, // Events we want to send: event and full key
@@ -268,12 +268,16 @@ impl Service {
         let mut events = Vec::new();
 
         if retry {
-            // We retry the previous transaction
+            // We retry the previous transaction AND new events
             for (_, e) in self
                 .db
                 .active_requests_for(outgoing_kind)
                 .filter_map(|r| r.ok())
             {
+                events.push(e);
+            }
+            self.db.mark_as_active(&new_events)?;
+            for (e, _) in new_events {
                 events.push(e);
             }
         } else {
@@ -283,10 +287,8 @@ impl Service {
             }
 
             if let OutgoingKind::Normal(server_name) = outgoing_kind {
-                if let Ok((select_edus, last_count)) = self.select_edus(server_name) {
-                    events.extend(select_edus.into_iter().map(SendingEventType::Edu));
-
-                    self.db.set_latest_educount(server_name, last_count)?;
+                if let Ok(select_edus) = self.select_edus(server_name).await {
+                    events.extend(select_edus.into_iter().map(|edu| SendingEventType::Edu(serde_json::to_vec(&edu).unwrap())));
                 }
             }
         }
@@ -295,36 +297,41 @@ impl Service {
     }
 
     #[tracing::instrument(skip(self, server_name))]
-    pub fn select_edus(&self, server_name: &ServerName) -> Result<(Vec<Vec<u8>>, u64)> {
-        // u64: count of last edu
-        let since = self.db.get_latest_educount(server_name)?;
+    pub async fn select_edus(&self, server_name: &ServerName) -> Result<Vec<Edu>> {
         let mut events = Vec::new();
-        let mut max_edu_count = since;
         let mut device_list_changes = HashSet::new();
 
-        'outer: for room_id in services().rooms.state_cache.server_rooms(server_name) {
-            let room_id = room_id?;
+        'outer: for room_id in services().rooms.state_cache.server_rooms(server_name).collect::<Result<Vec<_>>>()? {
             // Look for device list updates in this room
             device_list_changes.extend(
                 services()
                     .users
-                    .keys_changed(room_id.as_ref(), since, None)
+                    .keys_changed(room_id.as_ref(), 0, None)
                     .filter_map(|r| r.ok())
                     .filter(|user_id| user_id.server_name() == services().globals.server_name()),
             );
+
+            // Add typing events
+            let typing_users = services().rooms.edus.typing.typings_all(&room_id).await?;
+            if !typing_users.content.user_ids.is_empty() {
+                for user_id in typing_users.content.user_ids {
+                    events.push(Edu::Typing(federation::transactions::edu::TypingContent {
+                        room_id: room_id.clone(),
+                        user_id,
+                        typing: true,
+                    }));
+                }
+            }
+
 
             // Look for read receipts in this room
             for r in services()
                 .rooms
                 .edus
                 .read_receipt
-                .readreceipts_since(&room_id, since)
+                .readreceipts_since(&room_id, 0)
             {
-                let (user_id, count, read_receipt) = r?;
-
-                if count > max_edu_count {
-                    max_edu_count = count;
-                }
+                let (user_id, _count, read_receipt) = r?;
 
                 if user_id.server_name() != services().globals.server_name() {
                     continue;
@@ -370,7 +377,7 @@ impl Service {
                     }
                 };
 
-                events.push(serde_json::to_vec(&federation_event).expect("json can be serialized"));
+                events.push(federation_event);
 
                 if events.len() >= 20 {
                     break 'outer;
@@ -391,10 +398,10 @@ impl Service {
                 keys: None,
             });
 
-            events.push(serde_json::to_vec(&edu).expect("json can be serialized"));
+            events.push(edu);
         }
 
-        Ok((events, max_edu_count))
+        Ok(events)
     }
 
     #[tracing::instrument(skip(self, pdu_id, user, pushkey))]
