@@ -3,10 +3,10 @@ mod data;
 pub use data::Data;
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashSet},
     fmt::Debug,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use crate::{
@@ -16,7 +16,7 @@ use crate::{
     Config, Error, PduEvent, Result,
 };
 use federation::transactions::send_transaction_message;
-use futures_util::{stream::FuturesUnordered, StreamExt};
+
 
 use base64::{engine::general_purpose, Engine as _};
 
@@ -94,11 +94,7 @@ pub struct Service {
     receiver: Mutex<mpsc::UnboundedReceiver<(OutgoingKind, SendingEventType, Vec<u8>)>>,
 }
 
-enum TransactionStatus {
-    Running(Vec<SendingEventType>),
-    Failed(u32, Instant), // number of times failed, time of last failure
-    Retrying(u32),        // number of times failed
-}
+
 
 impl Service {
     pub fn build(db: &'static dyn Data, config: &Config) -> Arc<Self> {
@@ -118,211 +114,128 @@ impl Service {
         });
     }
 
-    async fn handler(&self) -> Result<()> {
+    async fn handler(self: Arc<Self>) -> Result<()> {
         let mut receiver = self.receiver.lock().await;
-
-        let mut futures = FuturesUnordered::new();
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
-
-        let mut current_transaction_status = HashMap::<OutgoingKind, TransactionStatus>::new();
-
-        // Retry requests we could not finish yet
-        let mut initial_transactions = HashMap::<OutgoingKind, Vec<SendingEventType>>::new();
-
-        for (key, outgoing_kind, event) in self.db.active_requests().filter_map(|r| r.ok()) {
-            let entry = initial_transactions
-                .entry(outgoing_kind.clone())
-                .or_default();
-
-            if entry.len() > 30 {
-                warn!(
-                    "Dropping some current events: {:?} {:?} {:?}",
-                    key, outgoing_kind, event
-                );
-                self.db.delete_active_request(key)?;
-                continue;
-            }
-
-            entry.push(event);
-        }
-
-        for (outgoing_kind, events) in initial_transactions {
-            current_transaction_status.insert(outgoing_kind.clone(), TransactionStatus::Running(Vec::new()));
-            futures.push(Self::handle_events(outgoing_kind.clone(), events));
-        }
+        let running_destinations = Arc::new(Mutex::new(HashSet::new()));
+        let mut interval = tokio::time::interval(Duration::from_secs(3));
 
         loop {
             select! {
-                Some(response) = futures.next() => {
-                    match response {
-                        Ok(outgoing_kind) => {
-                            self.db.delete_all_active_requests_for(&outgoing_kind)?;
-
-                            // 1. Get events that were queued in memory while the last transaction was running.
-                            let mut pending_events: Vec<SendingEventType> = if let Some(TransactionStatus::Running(events)) = current_transaction_status.get_mut(&outgoing_kind) {
-                                if !events.is_empty() {
-                                    std::mem::take(events)
-                                } else {
-                                    Vec::new()
-                                }
-                            } else {
-                                Vec::new()
-                            };
-
-                            // 2. Get events from the database queue.
-                            let new_db_events = self.db.queued_requests(&outgoing_kind)
-                                .filter_map(|r| r.ok())
-                                .take(30) // Limit batch size
-                                .collect::<Vec<_>>();
-
-                            if !new_db_events.is_empty() {
-                                self.db.mark_as_active(&new_db_events)?;
-                                pending_events.extend(new_db_events.into_iter().map(|(event, _key)| event));
-                            }
-
-                            // 3. If we have any events to send, start a new transaction.
-                            if !pending_events.is_empty() {
-                                // Set the status to Running with an empty vec, because all pending events are now in the new transaction.
-                                current_transaction_status.insert(outgoing_kind.clone(), TransactionStatus::Running(Vec::new()));
-                                futures.push(
-                                    Self::handle_events(
-                                        outgoing_kind.clone(),
-                                        pending_events,
-                                    )
-                                );
-                            } else {
-                                // No more events for this destination.
-                                current_transaction_status.remove(&outgoing_kind);
-                            }
-                        }
-                        Err((outgoing_kind, _)) => {
-                            current_transaction_status.entry(outgoing_kind).and_modify(|e| *e = match e {
-                                TransactionStatus::Running(_) => TransactionStatus::Failed(1, Instant::now()),
-                                TransactionStatus::Retrying(n) => TransactionStatus::Failed(*n+1, Instant::now()),
-                                TransactionStatus::Failed(_, _) => {
-                                    error!("Request that was not even running failed?!");
-                                    return
-                                },
-                            });
-                        }
-                    };
-                },
-                Some((outgoing_kind, event, key)) = receiver.recv() => {
-                    if let Ok(Some(events)) = self.select_events(
-                        &outgoing_kind,
-                        vec![(event, key)],
-                        &mut current_transaction_status,
-                    ).await {
-                        futures.push(Self::handle_events(outgoing_kind, events));
-                    }
-                }
                 _ = interval.tick() => {
-                    let mut retry_destinations = Vec::new();
-                    for (outgoing_kind, status) in &current_transaction_status {
-                        if let TransactionStatus::Failed(tries, time) = status {
-                            // Retry if we failed
-                            let mut min_elapsed_duration = Duration::from_secs(30) * (*tries) * (*tries);
-                            if min_elapsed_duration > Duration::from_secs(60 * 60 * 24) {
-                                min_elapsed_duration = Duration::from_secs(60 * 60 * 24);
-                            }
+                    // Proactively spawn workers for all known destinations to send fresh EDUs.
+                    let mut destinations: HashSet<OwnedServerName> = services()
+                        .rooms
+                        .state_cache
+                        .rooms_joined(services().globals.server_user())
+                        .filter_map(Result::ok)
+                        .flat_map(|room_id| {
+                            services()
+                                .rooms
+                                .state_cache
+                                .room_servers(&room_id)
+                                .filter_map(Result::ok)
+                        })
+                        .collect();
+                    destinations.remove(services().globals.server_name());
 
-                            if time.elapsed() < min_elapsed_duration {
-                                continue;
-                            }
-                            retry_destinations.push(outgoing_kind.clone());
+                    let running_destinations_lock = running_destinations.lock().await;
+                    for dest in destinations {
+                        let outgoing_kind = OutgoingKind::Normal(dest);
+                        if !running_destinations_lock.contains(&outgoing_kind) {
+                            Arc::clone(&self).spawn_worker(outgoing_kind, Arc::clone(&running_destinations));
                         }
                     }
-
-                    for outgoing_kind in retry_destinations {
-                        if let Ok(Some(events)) = self.select_events(
-                            &outgoing_kind,
-                            vec![],
-                            &mut current_transaction_status,
-                        ).await {
-                            futures.push(Self::handle_events(outgoing_kind.clone(), events));
-                        }
+                }
+                Some((outgoing_kind, event, _key)) = receiver.recv() => {
+                    self.db.queue_requests(&[(&outgoing_kind, event)])?;
+                    let running_destinations_lock = running_destinations.lock().await;
+                    if !running_destinations_lock.contains(&outgoing_kind) {
+                        Arc::clone(&self).spawn_worker(outgoing_kind, Arc::clone(&running_destinations));
                     }
                 }
             }
         }
     }
 
-    #[tracing::instrument(skip(self, outgoing_kind, new_events, current_transaction_status))]
-    async fn select_events(
-        &self,
-        outgoing_kind: &OutgoingKind,
-        new_events: Vec<(SendingEventType, Vec<u8>)>, // Events we want to send: event and full key
-        current_transaction_status: &mut HashMap<OutgoingKind, TransactionStatus>,
-    ) -> Result<Option<Vec<SendingEventType>>> {
-        let mut retry = false;
-        let mut allow = true;
+    fn spawn_worker(
+        self: Arc<Self>,
+        outgoing_kind: OutgoingKind,
+        running_destinations: Arc<Mutex<HashSet<OutgoingKind>>>,
+    ) {
+        tokio::spawn(async move {
+            running_destinations
+                .lock()
+                .await
+                .insert(outgoing_kind.clone());
 
-        let entry = current_transaction_status.entry(outgoing_kind.clone());
+            self.worker(outgoing_kind.clone()).await;
+            running_destinations
+                .lock()
+                .await
+                .remove(&outgoing_kind);
+        });
+    }
 
-        entry
-            .and_modify(|e| match e {
-                TransactionStatus::Running(ref mut edus) => {
-					debug!("Request for {:?} already running. Adding new events to queue.", outgoing_kind);
-					edus.extend(new_events.clone().into_iter().map(|(e, _)| e));
-					allow = false;
-                }
-                TransactionStatus::Retrying(_) => {
-                    debug!("Request for {:?} already running. Allowing new request to proceed.", outgoing_kind);
-                }
-                TransactionStatus::Failed(tries, time) => {
-                    // Fail if a request has failed recently (exponential backoff)
-                    let mut min_elapsed_duration = Duration::from_secs(30) * (*tries) * (*tries);
-                    if min_elapsed_duration > Duration::from_secs(60 * 60 * 24) {
-                        min_elapsed_duration = Duration::from_secs(60 * 60 * 24);
-                    }
-
-                    if time.elapsed() < min_elapsed_duration {
-                        allow = false;
-                    } else {
-                        retry = true;
-                        *e = TransactionStatus::Retrying(*tries);
-                    }
-                }
-            })
-            .or_insert_with(|| {
-                debug!("Starting new request for {:?}", outgoing_kind);
-                TransactionStatus::Running(Vec::new())
-            });
-
-        if !allow {
-            return Ok(None);
-        }
-
-        let mut events = Vec::new();
-
-        if retry {
-            // We retry the previous transaction AND new events
-            for (_, e) in self
+    async fn worker(&self, outgoing_kind: OutgoingKind) {
+        loop {
+            let mut active_events = self
                 .db
-                .active_requests_for(outgoing_kind)
-                .filter_map(|r| r.ok())
-            {
-                events.push(e);
-            }
-            self.db.mark_as_active(&new_events)?;
-            for (e, _) in new_events {
-                events.push(e);
-            }
-        } else {
-            self.db.mark_as_active(&new_events)?;
-            for (e, _) in new_events {
-                events.push(e);
-            }
+                .active_requests_for(&outgoing_kind)
+                .filter_map(Result::ok)
+                .collect::<Vec<_>>();
 
-            if let OutgoingKind::Normal(server_name) = outgoing_kind {
-                if let Ok(select_edus) = self.select_edus(server_name).await {
-                    events.extend(select_edus.into_iter().map(|edu| SendingEventType::Edu(serde_json::to_vec(&edu).unwrap())));
+            let new_events = self
+                .db
+                .queued_requests(&outgoing_kind)
+                .filter_map(Result::ok)
+                .collect::<Vec<_>>();
+
+            let mut selected_edus = Vec::new();
+            if let OutgoingKind::Normal(server_name) = &outgoing_kind {
+                if let Ok(edus) = self.select_edus(server_name).await {
+                    selected_edus = edus;
                 }
             }
-        }
 
-        Ok(Some(events))
+            if active_events.is_empty() && new_events.is_empty() && selected_edus.is_empty() {
+                break;
+            }
+
+            if let Err(e) = self.db.mark_as_active(&new_events) {
+                error!("Failed to mark new events as active, trying again later: {e}");
+                break;
+            }
+
+            active_events.extend(new_events.into_iter().map(|(e, k)| (k, e)));
+
+            let mut events_to_send = active_events
+                .into_iter()
+                .map(|(_key, event)| event)
+                .collect::<Vec<_>>();
+
+            events_to_send.extend(
+                selected_edus
+                    .into_iter()
+                    .map(|edu| SendingEventType::Edu(serde_json::to_vec(&edu).unwrap())),
+            );
+
+            let result = Self::handle_events(outgoing_kind.clone(), events_to_send).await;
+
+            if result.is_ok() {
+                if let Err(e) = self.db.delete_all_active_requests_for(&outgoing_kind) {
+                    error!(
+                        "Failed to delete active requests for {:?}, trying again later: {e}",
+                        outgoing_kind
+                    );
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
     }
+
+    
 
     #[tracing::instrument(skip(self, server_name))]
     pub async fn select_edus(&self, server_name: &ServerName) -> Result<Vec<Edu>> {
