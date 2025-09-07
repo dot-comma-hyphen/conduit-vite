@@ -686,13 +686,16 @@ impl Service {
                     );
                 }
 
+                let shortstatehash = services().rooms.state.get_latest_shortstatehash(&room_id)?
+                    .ok_or_else(|| Error::bad_database("Room has no state"))?;
+
                 let mut message = format!("Room Information for: {}\n", &room_id_or_alias);
                 message.push_str("---------------------------------\n");
                 message.push_str(&format!("Room ID: {}\n", room_id));
 
                 if let Some(event) = services().rooms.state_accessor.state_get(
-                    &room_id,
-                    ruma::events::StateEventType::RoomCanonicalAlias,
+                    shortstatehash,
+                    &ruma::events::StateEventType::RoomCanonicalAlias,
                     "",
                 )? {
                     let content = serde_json::from_str::<RoomCanonicalAliasEventContent>(event.content.get())
@@ -707,8 +710,8 @@ impl Service {
 
 
                 if let Some(event) = services().rooms.state_accessor.state_get(
-                    &room_id,
-                    ruma::events::StateEventType::RoomName,
+                    shortstatehash,
+                    &ruma::events::StateEventType::RoomName,
                     "",
                 )? {
                     let content = serde_json::from_str::<RoomNameEventContent>(event.content.get())
@@ -717,8 +720,8 @@ impl Service {
                 }
 
                 if let Some(event) = services().rooms.state_accessor.state_get(
-                    &room_id,
-                    ruma::events::StateEventType::RoomTopic,
+                    shortstatehash,
+                    &ruma::events::StateEventType::RoomTopic,
                     "",
                 )? {
                     let content = serde_json::from_str::<RoomTopicEventContent>(event.content.get())
@@ -727,8 +730,8 @@ impl Service {
                 }
 
                 if let Some(event) = services().rooms.state_accessor.state_get(
-                    &room_id,
-                    ruma::events::StateEventType::RoomAvatar,
+                    shortstatehash,
+                    &ruma::events::StateEventType::RoomAvatar,
                     "",
                 )? {
                     let content = serde_json::from_str::<ruma::events::room::avatar::RoomAvatarEventContent>(event.content.get())
@@ -742,36 +745,36 @@ impl Service {
                 message.push_str("State:\n");
 
                 if let Some(event) = services().rooms.state_accessor.state_get(
-                    &room_id,
-                    ruma::events::StateEventType::RoomJoinRules,
+                    shortstatehash,
+                    &ruma::events::StateEventType::RoomJoinRules,
                     "",
                 )? {
                     let content = serde_json::from_str::<RoomJoinRulesEventContent>(event.content.get())
                         .map_err(|_| Error::bad_database("Invalid join rules event"))?;
                     let join_rule_str = match content.join_rule {
-                        ruma::events::room::join_rules::JoinRule::Public => "Public",
-                        ruma::events::room::join_rules::JoinRule::Knock => "Knock",
-                        ruma::events::room::join_rules::JoinRule::Invite => "Invite",
-                        ruma::events::room::join_rules::JoinRule::Private => "Private",
-                        ruma::events::room::join_rules::JoinRule::Restricted => "Restricted",
-                        ruma::events::room::join_rules::JoinRule::KnockRestricted => "KnockRestricted",
+                        JoinRule::Public => "Public",
+                        JoinRule::Knock => "Knock",
+                        JoinRule::Invite => "Invite",
+                        JoinRule::Private => "Private",
+                        JoinRule::Restricted(_) => "Restricted",
+                        JoinRule::KnockRestricted(_) => "KnockRestricted",
                         _ => "Custom",
                     };
                     message.push_str(&format!("- Join Rule: {}\n", join_rule_str));
                 }
 
                 if let Some(event) = services().rooms.state_accessor.state_get(
-                    &room_id,
-                    ruma::events::StateEventType::RoomHistoryVisibility,
+                    shortstatehash,
+                    &ruma::events::StateEventType::RoomHistoryVisibility,
                     "",
                 )? {
                     let content = serde_json::from_str::<RoomHistoryVisibilityEventContent>(event.content.get())
                         .map_err(|_| Error::bad_database("Invalid history visibility event"))?;
                     let history_visibility_str = match content.history_visibility {
-                        ruma::events::room::history_visibility::HistoryVisibility::Invited => "Invited",
-                        ruma::events::room::history_visibility::HistoryVisibility::Joined => "Joined",
-                        ruma::events::room::history_visibility::HistoryVisibility::Shared => "Shared",
-                        ruma::events::room::history_visibility::HistoryVisibility::WorldReadable => "WorldReadable",
+                        HistoryVisibility::Invited => "Invited",
+                        HistoryVisibility::Joined => "Joined",
+                        HistoryVisibility::Shared => "Shared",
+                        HistoryVisibility::WorldReadable => "WorldReadable",
                         _ => "Custom",
                     };
                     message.push_str(&format!(
@@ -781,8 +784,8 @@ impl Service {
                 }
 
                 if let Some(_event) = services().rooms.state_accessor.state_get(
-                    &room_id,
-                    ruma::events::StateEventType::RoomEncryption,
+                    shortstatehash,
+                    &ruma::events::StateEventType::RoomEncryption,
                     "",
                 )? {
                     message.push_str(&format!("- Encrypted: {}\n", true));
