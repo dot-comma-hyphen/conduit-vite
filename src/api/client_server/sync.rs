@@ -1312,41 +1312,35 @@ fn share_encrypted_room(
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::{service::rooms::timeline::PduCount, services, utils, Error, PduEvent, Result, Ruma};
-	use ruma::{
-		api::client::{sync::sync_events, typing::create_typing_event},
-		event_id, room_id, user_id,
-	};
+	use crate::{services, Ruma};
+	use ruma::{api::client::sync::sync_events, presence::PresenceState};
 	use std::time::Duration;
 	use tokio::time::timeout;
 
 	#[tokio::test]
 	async fn test_sync_longpoll_typing() {
 		// Setup a server, user, and room
-		let (server, user, room_id) = services().globals.new_server_test().await;
+		let services = crate::test::start_server().await;
+		let (user, room_id) = crate::test::create_user_and_room(&services).await;
 
 		// Start a sync request in the background
-		let sync_request = sync_events::v3::Request {
-			filter: None,
-			since: Some("0".to_owned()),
-			full_state: false,
-			set_presence: ruma::api::client::presence::PresenceState::Online,
-			timeout: Some(Duration::from_secs(10)),
-		};
-		let sync_task = tokio::spawn(sync_events_route(Ruma::from_parts(
-			http::Request::new(vec![]).unwrap(),
-			sync_request,
-		)));
+		let mut sync_request = sync_events::v3::Request::new();
+		sync_request.since = Some("0".to_owned());
+		sync_request.timeout = Some(Duration::from_secs(10));
+
+		let sync_task = tokio::spawn(sync_events_route(
+			Ruma(sync_request)
+		));
 
 		// Give the sync request a moment to start
 		tokio::time::sleep(Duration::from_millis(500)).await;
 
 		// Send a typing event
-		services()
+		services
 			.rooms
 			.edus
 			.typing
-			.add_typing_event(user.id.clone(), &room_id, 30000)
+			.typing_add(user.id.clone(), &room_id, 30000)
 			.await
 			.unwrap();
 
@@ -1363,7 +1357,7 @@ mod tests {
 		assert_eq!(ephemeral_events.len(), 1, "Expected one ephemeral event");
 
 		let event = ephemeral_events[0].deserialize().unwrap();
-		if let ruma::events::AnyEphemeralRoomEvent::Typing(typing) = event {
+		if let ruma::events::EphemeralRoomEvent::Typing(typing) = event {
 			assert_eq!(
 				typing.content.user_ids,
 				vec![user.id],
