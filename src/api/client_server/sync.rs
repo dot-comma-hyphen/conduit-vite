@@ -587,6 +587,47 @@ async fn sync_helper(
             }
         }
 
+        // if there are no events, we long-poll
+        if !full_state
+            && joined_rooms.is_empty()
+            && left_rooms.is_empty()
+            && invited_rooms.is_empty()
+            && knocked_rooms.is_empty()
+            && presence_updates.is_empty()
+            && services()
+                .account_data
+                .global_changes_since(&sender_user, since)?
+                .is_empty()
+            && device_list_updates.is_empty()
+            && device_list_left.is_empty()
+            && services()
+                .users
+                .get_to_device_events(&sender_user, &sender_device)?
+                .is_empty()
+        {
+            let mut duration = body.timeout.unwrap_or_default();
+            if duration.as_secs() > 30 {
+                // Some clients send ridiculous large timeouts
+                duration = Duration::from_secs(30);
+            }
+
+            let mut watcher = Box::pin(watcher);
+            let _ = tokio::time::timeout(duration, async {
+                tokio::select! {
+                    _ = &mut watcher => {},
+                    res = typing_receiver.recv() => {
+                        if let Ok(room_id) = res {
+                            // TODO: This is not very efficient, we should only have one typing update per room
+                            if services().rooms.state_cache.is_joined(&sender_user, &room_id).unwrap_or(false) {
+                            }
+                        }
+                    },
+                }
+            })
+            .await;
+            continue;
+        }
+
         // Remove all to-device events the device received *last time*
         services()
             .users
@@ -634,38 +675,7 @@ async fn sync_helper(
             device_unused_fallback_key_types: None,
         };
 
-        // TODO: Retry the endpoint instead of returning (waiting for #118)
-        if !full_state
-            && response.rooms.is_empty()
-            && response.presence.is_empty()
-            && response.account_data.is_empty()
-            && response.device_lists.is_empty()
-            && response.to_device.is_empty()
-        {
-            let watcher = services().globals.watch(&sender_user, &sender_device);
-            let watcher = Box::pin(watcher);
-            let mut duration = body.timeout.unwrap_or_default();
-            if duration.as_secs() > 30 {
-                duration = Duration::from_secs(30);
-            }
-            let mut watcher_receiver = watcher;
-            let _ = tokio::time::timeout(duration, async {
-                tokio::select! {
-                    _ = &mut watcher_receiver => {},
-                    res = typing_receiver.recv() => {
-                        if let Ok(room_id) = res {
-                            // TODO: This is not very efficient, we should only have one typing update per room
-                            if services().rooms.state_cache.is_joined(&sender_user, &room_id).unwrap_or(false) {
-                            }
-                        }
-                    },
-                }
-            })
-            .await;
-            continue;
-        } else {
-            return Ok((response, since != next_batch)); // Only cache if we made progress
-        }
+        return Ok((response, since != next_batch)); // Only cache if we made progress
     }
 }
 
@@ -1298,6 +1308,7 @@ fn share_encrypted_room(
         })
         .any(|encrypted| encrypted))
 }
+
 
 pub async fn sync_events_v5_route(
     body: Ruma<sync_events::v5::Request>,
