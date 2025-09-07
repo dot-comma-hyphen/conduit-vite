@@ -510,16 +510,20 @@ impl Service {
                         {
                             let mut body = body;
                             if body.starts_with('!') {
+                                // Collect members into a Vec to prevent holding the non-Send iterator across an await
+                                let members = services()
+                                    .rooms
+                                    .state_cache
+                                    .room_members(&admin_room)
+                                    .collect::<Result<Vec<_>, _>>()?;
+
+                                // Acquire lock once
+                                let appservices = services().appservice.read().await;
+
                                 let mut other_bot_users = 0;
-                                for member_result in
-                                    services().rooms.state_cache.room_members(&admin_room)
-                                {
-                                    let member = member_result?;
+                                for member in members {
                                     if member != *server_user {
-                                        if services()
-                                            .appservice
-                                            .read()
-                                            .await
+                                        if appservices
                                             .values()
                                             .any(|appservice| appservice.is_user_match(&member))
                                         {
@@ -530,7 +534,7 @@ impl Service {
 
                                 if other_bot_users == 0 {
                                     body.insert_str(0, &format!("{server_user}: "));
-                                 }
+                                }
                             }
 
                             let to_conduit = body.starts_with(&format!("{server_user}: "))
