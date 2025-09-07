@@ -533,6 +533,7 @@ impl Service {
                                 }
 
                                 if other_bot_users == 0 {
+                                    body.remove(0);
                                     body.insert_str(0, &format!("{server_user}: "));
                                 }
                             }
