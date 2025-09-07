@@ -56,7 +56,19 @@ use super::{
 
 #[cfg_attr(test, derive(Debug))]
 #[derive(Parser)]
-#[command(name = "@conduit:server.name:", version = env!("CARGO_PKG_VERSION"))]
+#[command(
+    name = "@conduit:server.name:",
+    version = env!("CARGO_PKG_VERSION"),
+    long_about = "Welcome to the Conduit administration room.
+
+You can run commands by sending a message in this room.
+
+Commands must be prefixed with the bot's user ID, e.g.:
+@conduit:server.name: command --arg
+
+If the Conduit admin is the only bot in the room, you can also use a shortcut:
+!command --arg"
+)]
 enum AdminCommand {
     #[command(verbatim_doc_comment)]
     /// Register an appservice using its registration YAML
