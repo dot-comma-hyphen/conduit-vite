@@ -1311,62 +1311,79 @@ fn share_encrypted_room(
 
 #[cfg(test)]
 mod tests {
-	use super::*;
-	use crate::{services, Ruma};
-	use ruma::{api::client::sync::sync_events, presence::PresenceState};
-	use std::time::Duration;
-	use tokio::time::timeout;
+    use super::*;
+    use crate::services;
+    use ruma::{
+        api::client::{presence::PresenceState, sync::sync_events},
+        events::AnyEphemeralRoomEvent,
+    };
+    use std::time::Duration;
+    use tokio::time::timeout;
 
-	#[tokio::test]
-	async fn test_sync_longpoll_typing() {
-		// Setup a server, user, and room
-		let services = crate::test::start_server().await;
-		let (user, room_id) = crate::test::create_user_and_room(&services).await;
+    #[tokio::test]
+    async fn test_sync_longpoll_typing() {
+        // Setup a server, user, and room
+        let (user, room_id) = services()
+            .globals
+            .server_user()
+            .await
+            .expect("Failed to create user");
 
-		// Start a sync request in the background
-		let mut sync_request = sync_events::v3::Request::new();
-		sync_request.since = Some("0".to_owned());
-		sync_request.timeout = Some(Duration::from_secs(10));
+        // Start a sync request in the background
+        let mut sync_request = sync_events::v3::Request::new();
+        sync_request.since = Some("0".to_owned());
+        sync_request.timeout = Some(Duration::from_secs(10));
 
-		let sync_task = tokio::spawn(sync_events_route(
-			Ruma(sync_request)
-		));
+        let ruma_req = Ruma {
+            body: sync_request,
+            sender_user: Some(user.id.clone()),
+            sender_device: Some(user.device_id.clone()),
+            sender_servername: Some(user.server_name.clone()),
+            json_body: None,
+            appservice_info: None,
+        };
 
-		// Give the sync request a moment to start
-		tokio::time::sleep(Duration::from_millis(500)).await;
+        let sync_task = tokio::spawn(sync_events_route(ruma_req));
 
-		// Send a typing event
-		services
-			.rooms
-			.edus
-			.typing
-			.typing_add(user.id.clone(), &room_id, 30000)
-			.await
-			.unwrap();
+        // Give the sync request a moment to start
+        tokio::time::sleep(Duration::from_millis(500)).await;
 
-		// The sync should now complete quickly. We'll wait a max of 1 second.
-		let sync_result = timeout(Duration::from_secs(1), sync_task).await;
+        // Send a typing event
+        services()
+            .rooms
+            .edus
+            .typing
+            .typing_add(
+                &user.id,
+                &room_id,
+                utils::millis_since_unix_epoch() + 30000,
+            )
+            .await
+            .unwrap();
 
-		assert!(sync_result.is_ok(), "Sync request timed out");
+        // The sync should now complete quickly. We'll wait a max of 1 second.
+        let sync_result = timeout(Duration::from_secs(1), sync_task).await;
 
-		let sync_response = sync_result.unwrap().unwrap().unwrap();
+        assert!(sync_result.is_ok(), "Sync request timed out");
 
-		let room = sync_response.rooms.join.get(&room_id).unwrap();
-		let ephemeral_events = &room.ephemeral.events;
+        let sync_response = sync_result.unwrap().unwrap().unwrap();
 
-		assert_eq!(ephemeral_events.len(), 1, "Expected one ephemeral event");
+        let room = sync_response.rooms.join.get(&room_id).unwrap();
+        let ephemeral_events = &room.ephemeral.events;
 
-		let event = ephemeral_events[0].deserialize().unwrap();
-		if let ruma::events::EphemeralRoomEvent::Typing(typing) = event {
-			assert_eq!(
-				typing.content.user_ids,
-				vec![user.id],
-				"Typing event for the wrong user"
-			);
-		} else {
-			panic!("Expected a typing event");
-		}
-	}
+        assert_eq!(ephemeral_events.len(), 1, "Expected one ephemeral event");
+
+        let event = ephemeral_events[0].deserialize().unwrap();
+        if let AnyEphemeralRoomEvent::Typing(typing) = event {
+            assert_eq!(
+                typing.content.user_ids,
+                vec![user.id],
+                "Typing event for the wrong user"
+            );
+        } else {
+            panic!("Expected a typing event");
+        }
+    }
 }
 
 pub async fn sync_events_v5_route(
