@@ -495,26 +495,50 @@ impl Service {
 
                     let server_user = services().globals.server_user();
 
-                    let to_conduit = body.starts_with(&format!("{server_user}: "))
-                        || body.starts_with(&format!("{server_user} "))
-                        || body == format!("{server_user}:")
-                        || body == server_user.as_str();
-
                     // This will evaluate to false if the emergency password is set up so that
                     // the administrator can execute commands as conduit
                     let from_conduit = pdu.sender == *server_user
                         && services().globals.emergency_password().is_none();
 
                     if let Some(admin_room) = services().admin.get_admin_room()? {
-                        if to_conduit
-                            && !from_conduit
+                        if !from_conduit
                             && admin_room == *pdu.room_id()
                             && services()
                                 .rooms
                                 .state_cache
                                 .is_joined(server_user, &admin_room)?
                         {
-                            services().admin.process_message(body);
+                            let mut body = body;
+                            if body.starts_with('!') {
+                                let mut bot_users = 0;
+                                for member in
+                                    services().rooms.state_cache.room_members(&admin_room)?
+                                {
+                                    let member = member?;
+                                    if services()
+                                        .appservice
+                                        .read()
+                                        .await
+                                        .values()
+                                        .any(|appservice| appservice.is_user_match(&member))
+                                    {
+                                        bot_users += 1;
+                                    }
+                                }
+
+                                if bot_users <= 1 {
+                                    body.insert_str(0, &format!("{server_user}: "));
+                                }
+                            }
+
+                            let to_conduit = body.starts_with(&format!("{server_user}: "))
+                                || body.starts_with(&format!("{server_user} "))
+                                || body == format!("{server_user}:")
+                                || body == server_user.as_str();
+
+                            if to_conduit {
+                                services().admin.process_message(body);
+                            }
                         }
                     }
                 }
