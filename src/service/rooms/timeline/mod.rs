@@ -495,26 +495,63 @@ impl Service {
 
                     let server_user = services().globals.server_user();
 
-                    let to_conduit = body.starts_with(&format!("{server_user}: "))
-                        || body.starts_with(&format!("{server_user} "))
-                        || body == format!("{server_user}:")
-                        || body == server_user.as_str();
-
                     // This will evaluate to false if the emergency password is set up so that
                     // the administrator can execute commands as conduit
                     let from_conduit = pdu.sender == *server_user
                         && services().globals.emergency_password().is_none();
 
                     if let Some(admin_room) = services().admin.get_admin_room()? {
-                        if to_conduit
-                            && !from_conduit
+                        if !from_conduit
                             && admin_room == *pdu.room_id()
                             && services()
                                 .rooms
                                 .state_cache
                                 .is_joined(server_user, &admin_room)?
                         {
-                            services().admin.process_message(body);
+                            let mut body = body;
+                            let localpart = server_user.localpart();
+
+                            let is_shortcut = body.starts_with('!');
+                            let is_direct_command = body.starts_with(&format!("{server_user}:"))
+                                || body.starts_with(&format!("{server_user} "))
+                                || body.starts_with(&format!("{localpart}:"))
+                                || body.starts_with(&format!("{localpart} "))
+                                || body.trim() == server_user.as_str()
+                                || body.trim() == localpart;
+
+                            let mut is_command = is_direct_command;
+
+                            if is_shortcut {
+                                // Check if shortcut is active
+                                let members = services()
+                                    .rooms
+                                    .state_cache
+                                    .room_members(&admin_room)
+                                    .collect::<Result<Vec<_>, _>>()?;
+
+                                let appservices = services().appservice.read().await;
+                                let mut other_bot_users = 0;
+                                for member in members {
+                                    if member != *server_user {
+                                        if appservices
+                                            .values()
+                                            .any(|appservice| appservice.is_user_match(&member))
+                                        {
+                                            other_bot_users += 1;
+                                        }
+                                    }
+                                }
+
+                                if other_bot_users == 0 {
+                                    is_command = true;
+                                    body.remove(0);
+                                    body.insert_str(0, &format!("{server_user}: "));
+                                }
+                            }
+
+                            if is_command {
+                                services().admin.process_message(body);
+                            }
                         }
                     }
                 }
