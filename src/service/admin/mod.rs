@@ -550,8 +550,19 @@ impl Service {
 
     // Parse chat messages from the admin room into an AdminCommand object
     fn parse_admin_command(&self, command_line: &str) -> std::result::Result<AdminCommand, String> {
+        let mut command_line = command_line.to_string();
+        let conduit_user = services().globals.server_user();
+        let prefix = format!("{conduit_user}:");
+
+        if command_line.starts_with(&prefix) {
+            let command_part = &command_line[prefix.len()..];
+            if !command_part.starts_with(' ') && !command_part.is_empty() {
+                command_line.insert(prefix.len(), ' ');
+            }
+        }
+
         // Note: argv[0] is `@conduit:servername:`, which is treated as the main command
-        let mut argv = match shell_words::split(command_line) {
+        let mut argv = match shell_words::split(&command_line) {
             Ok(args) => args,
             Err(e) => return Err(format!("Failed to parse admin command: {e}")),
         };
