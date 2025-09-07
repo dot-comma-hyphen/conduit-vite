@@ -686,7 +686,7 @@ impl Service {
                     );
                 }
 
-                let shortstatehash = services().rooms.state.get_latest_shortstatehash(&room_id)?
+                let shortstatehash = services().rooms.state.get_room_shortstatehash(&room_id)?
                     .ok_or_else(|| Error::bad_database("Room has no state"))?;
 
                 let mut message = format!("Room Information for: {}\n", &room_id_or_alias);
