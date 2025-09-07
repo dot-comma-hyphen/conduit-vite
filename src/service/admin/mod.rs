@@ -663,21 +663,20 @@ impl Service {
             AdminCommand::RoomInfo { room_id_or_alias } => {
                 let room_id = if room_id_or_alias.starts_with('!') {
                     RoomId::parse(&room_id_or_alias).map_err(|_| {
-                        Error::AdminCommand("Invalid room ID".to_owned())
+                        Error::AdminCommand("Invalid room ID")
                     })?
                 } else if room_id_or_alias.starts_with('#') {
                     let alias = RoomAliasId::parse(&room_id_or_alias).map_err(|_| {
-                        Error::AdminCommand("Invalid room alias".to_owned())
+                        Error::AdminCommand("Invalid room alias")
                     })?;
                     services()
                         .rooms
                         .alias
-                        .resolve_alias(&alias)
-                        .await?
-                        .ok_or_else(|| Error::AdminCommand("Room alias not found.".to_owned()))?
+                        .resolve_local_alias(&alias)?
+                        .ok_or_else(|| Error::AdminCommand("Room alias not found."))?
                 } else {
                     return Err(Error::AdminCommand(
-                        "Invalid room ID or alias. Must start with '!' or '#'".to_owned(),
+                        "Invalid room ID or alias. Must start with '!' or '#'",
                     ));
                 };
 
@@ -687,81 +686,112 @@ impl Service {
                     );
                 }
 
-                let mut markdown = format!("**Room Information for: {}**\n", &room_id_or_alias);
-                markdown.push_str("---\n");
-                markdown.push_str(&format!("**Room ID:** `{}`\n", room_id));
+                let mut message = format!("Room Information for: {}\n", &room_id_or_alias);
+                message.push_str("---------------------------------\n");
+                message.push_str(&format!("Room ID: {}\n", room_id));
 
-                if let Ok(Some(alias)) =
-                    services().rooms.state_accessor.get_canonical_alias(&room_id)
-                {
-                    markdown.push_str(&format!("**Canonical Alias:** `{}`\n", alias));
-                }
-
-                let aliases: Vec<String> = services()
-                    .rooms
-                    .alias
-                    .get_room_aliases(&room_id)
-                    .filter_map(Result::ok)
-                    .map(|alias| alias.to_string())
-                    .collect();
-
-                if !aliases.is_empty() {
-                    markdown.push_str(&format!("**Aliases:** `{:?}`\n", aliases));
-                }
-
-                if let Ok(Some(name)) = services().rooms.state_accessor.get_name(&room_id) {
-                    markdown.push_str(&format!("**Name:** {}\n", name.name()));
-                }
-
-                if let Ok(Some(topic)) = services().rooms.state_accessor.get_topic(&room_id) {
-                    markdown.push_str(&format!("**Topic:** {}\n", topic.topic()));
-                }
-
-                if let Ok(Some(avatar)) = services().rooms.state_accessor.get_avatar(&room_id) {
-                    if let Some(url) = avatar.url() {
-                        markdown.push_str(&format!("**Avatar URL:** `{}`\n", url));
+                if let Some(event) = services().rooms.state_accessor.get_state_event(
+                    &room_id,
+                    ruma::events::StateEventType::RoomCanonicalAlias,
+                    "",
+                )? {
+                    let content = serde_json::from_str::<RoomCanonicalAliasEventContent>(event.content.get())
+                        .map_err(|_| Error::bad_database("Invalid canonical alias event"))?;
+                    if let Some(alias) = content.alias {
+                        message.push_str(&format!("Canonical Alias: {}\n", alias));
+                    }
+                    if !content.alt_aliases.is_empty() {
+                        message.push_str(&format!("Aliases: {:?}\n", content.alt_aliases));
                     }
                 }
 
-                markdown.push_str("---\n");
-                markdown.push_str("**State:**\n");
 
-                if let Ok(Some(join_rule)) =
-                    services().rooms.state_accessor.get_join_rules(&room_id)
-                {
-                    markdown.push_str(&format!("- **Join Rule:** {}\n", join_rule.join_rule()));
+                if let Some(event) = services().rooms.state_accessor.get_state_event(
+                    &room_id,
+                    ruma::events::StateEventType::RoomName,
+                    "",
+                )? {
+                    let content = serde_json::from_str::<RoomNameEventContent>(event.content.get())
+                        .map_err(|_| Error::bad_database("Invalid room name event"))?;
+                    message.push_str(&format!("Name: {}\n", content.name));
                 }
 
-                if let Ok(Some(history_visibility)) =
-                    services().rooms.state_accessor.get_history_visibility(&room_id)
-                {
-                    markdown.push_str(&format!(
-                        "- **Visibility:** {}\n",
-                        history_visibility.history_visibility()
+                if let Some(event) = services().rooms.state_accessor.get_state_event(
+                    &room_id,
+                    ruma::events::StateEventType::RoomTopic,
+                    "",
+                )? {
+                    let content = serde_json::from_str::<RoomTopicEventContent>(event.content.get())
+                        .map_err(|_| Error::bad_database("Invalid room topic event"))?;
+                    message.push_str(&format!("Topic: {}\n", content.topic));
+                }
+
+                if let Some(event) = services().rooms.state_accessor.get_state_event(
+                    &room_id,
+                    ruma::events::StateEventType::RoomAvatar,
+                    "",
+                )? {
+                    let content = serde_json::from_str::<ruma::events::room::avatar::RoomAvatarEventContent>(event.content.get())
+                        .map_err(|_| Error::bad_database("Invalid room avatar event"))?;
+                    if let Some(url) = content.url {
+                        message.push_str(&format!("Avatar URL: {}\n", url));
+                    }
+                }
+
+                message.push_str("---------------------------------\n");
+                message.push_str("State:\n");
+
+                if let Some(event) = services().rooms.state_accessor.get_state_event(
+                    &room_id,
+                    ruma::events::StateEventType::RoomJoinRules,
+                    "",
+                )? {
+                    let content = serde_json::from_str::<RoomJoinRulesEventContent>(event.content.get())
+                        .map_err(|_| Error::bad_database("Invalid join rules event"))?;
+                    message.push_str(&format!("- Join Rule: {}\n", content.join_rule));
+                }
+
+                if let Some(event) = services().rooms.state_accessor.get_state_event(
+                    &room_id,
+                    ruma::events::StateEventType::RoomHistoryVisibility,
+                    "",
+                )? {
+                    let content = serde_json::from_str::<RoomHistoryVisibilityEventContent>(event.content.get())
+                        .map_err(|_| Error::bad_database("Invalid history visibility event"))?;
+                    message.push_str(&format!(
+                        "- Visibility: {}\n",
+                        content.history_visibility
                     ));
                 }
 
-                let is_encrypted = services().rooms.state_accessor.is_encrypted(&room_id)?;
-                markdown.push_str(&format!("- **Encrypted:** {}\n", is_encrypted));
+                if let Some(_event) = services().rooms.state_accessor.get_state_event(
+                    &room_id,
+                    ruma::events::StateEventType::RoomEncryption,
+                    "",
+                )? {
+                    message.push_str(&format!("- Encrypted: {}\n", true));
+                } else {
+                    message.push_str(&format!("- Encrypted: {}\n", false));
+                }
 
-                markdown.push_str("---\n");
+                message.push_str("---------------------------------\n");
 
-                let members = services().rooms.state_cache.get_room_members(&room_id)?;
+                let members = services().rooms.state_cache.room_members(&room_id)?;
                 let power_levels = services()
                     .rooms
                     .state_accessor
-                    .room_power_levels(&room_id)?;
+                    .power_levels(&room_id)?;
 
-                markdown.push_str(&format!("**Members (Count: {}):**\n", members.len()));
+                message.push_str(&format!("Members (Count: {}):\n", members.len()));
                 for user_id in members {
                     let power_level = power_levels.users.get(&user_id).map_or(
                         power_levels.users_default,
                         |p| *p,
                     );
-                    markdown.push_str(&format!("- `{}` (Power Level: {})\n", user_id, power_level));
+                    message.push_str(&format!("- {} (Power Level: {})\n", user_id, power_level));
                 }
 
-                RoomMessageEventContent::text_plain(markdown).into()
+                RoomMessageEventContent::text_plain(message).into()
             }
             AdminCommand::ListRooms => {
                 let room_ids = services().rooms.metadata.iter_ids();
