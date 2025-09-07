@@ -188,177 +188,279 @@ async fn sync_helper(
     // TODO: match body.set_presence {
     services().rooms.edus.presence.ping_presence(&sender_user)?;
 
-    // Setup watchers, so if there's no response, we can wait for them
-    let watcher = services().globals.watch(&sender_user, &sender_device);
-
-    let next_batch = services().globals.current_count()?;
-    let next_batchcount = PduCount::Normal(next_batch);
-    let next_batch_string = next_batch.to_string();
-
-    // Load filter
-    let filter = match body.filter {
-        None => FilterDefinition::default(),
-        Some(Filter::FilterDefinition(filter)) => filter,
-        Some(Filter::FilterId(filter_id)) => services()
-            .users
-            .get_filter(&sender_user, &filter_id)?
-            .unwrap_or_default(),
-    };
-
-    let (lazy_load_enabled, lazy_load_send_redundant) = match filter.room.state.lazy_load_options {
-        LazyLoadOptions::Enabled {
-            include_redundant_members: redundant,
-        } => (true, redundant),
-        _ => (false, false),
-    };
-
-    let full_state = body.full_state;
-
-    let mut joined_rooms = BTreeMap::new();
     let since = body
         .since
         .as_ref()
         .and_then(|string| string.parse().ok())
         .unwrap_or(0);
-    let sincecount = PduCount::Normal(since);
 
-    let mut presence_updates = HashMap::new();
-    let mut left_encrypted_users = HashSet::new(); // Users that have left any encrypted rooms the sender was in
-    let mut device_list_updates = HashSet::new();
-    let mut device_list_left = HashSet::new();
+    // Setup watchers, so if there's no response, we can wait for them
+    loop {
+        let watcher = services().globals.watch(&sender_user, &sender_device);
+        let mut typing_receiver = services().rooms.edus.typing.typing_update_sender.subscribe();
 
-    // Look for device list updates of this account
-    device_list_updates.extend(
-        services()
-            .users
-            .keys_changed(sender_user.as_ref(), since, None)
-            .filter_map(|r| r.ok()),
-    );
+        // Load filter
+        let filter = match body.filter.clone() {
+            None => FilterDefinition::default(),
+            Some(Filter::FilterDefinition(filter)) => filter,
+            Some(Filter::FilterId(filter_id)) => services()
+                .users
+                .get_filter(&sender_user, &filter_id)?
+                .unwrap_or_default(),
+        };
 
-    let all_joined_rooms = services()
-        .rooms
-        .state_cache
-        .rooms_joined(&sender_user)
-        .collect::<Vec<_>>();
-    for room_id in all_joined_rooms {
-        let room_id = room_id?;
-        if let Ok(joined_room) = load_joined_room(
-            &sender_user,
-            &sender_device,
-            &room_id,
-            since,
-            sincecount,
-            next_batch,
-            next_batchcount,
-            lazy_load_enabled,
-            lazy_load_send_redundant,
-            full_state,
-            &mut device_list_updates,
-            &mut left_encrypted_users,
-        )
-        .await
-        {
-            if !joined_room.is_empty() {
-                joined_rooms.insert(room_id.clone(), joined_room);
-            }
+        let (lazy_load_enabled, lazy_load_send_redundant) =
+            match filter.room.state.lazy_load_options {
+                LazyLoadOptions::Enabled {
+                    include_redundant_members: redundant,
+                } => (true, redundant),
+                _ => (false, false),
+            };
 
-            // Take presence updates from this room
-            for (user_id, presence) in services()
-                .rooms
-                .edus
-                .presence
-                .presence_since(&room_id, since)?
+        let full_state = body.full_state;
+
+        let mut joined_rooms = BTreeMap::new();
+        let sincecount = PduCount::Normal(since);
+
+        let mut presence_updates = HashMap::new();
+        let mut left_encrypted_users = HashSet::new(); // Users that have left any encrypted rooms the sender was in
+        let mut device_list_updates = HashSet::new();
+        let mut device_list_left = HashSet::new();
+
+        // Look for device list updates of this account
+        device_list_updates.extend(
+            services()
+                .users
+                .keys_changed(sender_user.as_ref(), since, None)
+                .filter_map(|r| r.ok()),
+        );
+
+        let all_joined_rooms = services()
+            .rooms
+            .state_cache
+            .rooms_joined(&sender_user)
+            .collect::<Vec<_>>();
+
+        let next_batch = services().globals.current_count()?;
+        let next_batchcount = PduCount::Normal(next_batch);
+        let next_batch_string = next_batch.to_string();
+
+        for room_id in all_joined_rooms {
+            let room_id = room_id?;
+            if let Ok(joined_room) = load_joined_room(
+                &sender_user,
+                &sender_device,
+                &room_id,
+                since,
+                sincecount,
+                next_batch,
+                next_batchcount,
+                lazy_load_enabled,
+                lazy_load_send_redundant,
+                full_state,
+                &mut device_list_updates,
+                &mut left_encrypted_users,
+            )
+            .await
             {
-                match presence_updates.entry(user_id) {
-                    Entry::Vacant(v) => {
-                        v.insert(presence);
-                    }
-                    Entry::Occupied(mut o) => {
-                        let p = o.get_mut();
+                if !joined_room.is_empty() {
+                    joined_rooms.insert(room_id.clone(), joined_room);
+                }
 
-                        // Update existing presence event with more info
-                        p.content.presence = presence.content.presence;
-                        if let Some(status_msg) = presence.content.status_msg {
-                            p.content.status_msg = Some(status_msg);
+                // Take presence updates from this room
+                for (user_id, presence) in services()
+                    .rooms
+                    .edus
+                    .presence
+                    .presence_since(&room_id, since)?
+                {
+                    match presence_updates.entry(user_id) {
+                        Entry::Vacant(v) => {
+                            v.insert(presence);
                         }
-                        if let Some(last_active_ago) = presence.content.last_active_ago {
-                            p.content.last_active_ago = Some(last_active_ago);
-                        }
-                        if let Some(displayname) = presence.content.displayname {
-                            p.content.displayname = Some(displayname);
-                        }
-                        if let Some(avatar_url) = presence.content.avatar_url {
-                            p.content.avatar_url = Some(avatar_url);
-                        }
-                        if let Some(currently_active) = presence.content.currently_active {
-                            p.content.currently_active = Some(currently_active);
+                        Entry::Occupied(mut o) => {
+                            let p = o.get_mut();
+
+                            // Update existing presence event with more info
+                            p.content.presence = presence.content.presence;
+                            if let Some(status_msg) = presence.content.status_msg {
+                                p.content.status_msg = Some(status_msg);
+                            }
+                            if let Some(last_active_ago) = presence.content.last_active_ago {
+                                p.content.last_active_ago = Some(last_active_ago);
+                            }
+                            if let Some(displayname) = presence.content.displayname {
+                                p.content.displayname = Some(displayname);
+                            }
+                            if let Some(avatar_url) = presence.content.avatar_url {
+                                p.content.avatar_url = Some(avatar_url);
+                            }
+                            if let Some(currently_active) = presence.content.currently_active {
+                                p.content.currently_active = Some(currently_active);
+                            }
                         }
                     }
                 }
             }
         }
-    }
 
-    let mut left_rooms = BTreeMap::new();
-    let all_left_rooms: Vec<_> = services()
-        .rooms
-        .state_cache
-        .rooms_left(&sender_user)
-        .collect();
-    for result in all_left_rooms {
-        let (room_id, _) = result?;
-
-        {
-            // Get and drop the lock to wait for remaining operations to finish
-            let mutex_insert = Arc::clone(
-                services()
-                    .globals
-                    .roomid_mutex_insert
-                    .write()
-                    .await
-                    .entry(room_id.clone())
-                    .or_default(),
-            );
-            let insert_lock = mutex_insert.lock().await;
-            drop(insert_lock);
-        }
-
-        let left_count = services()
+        let mut left_rooms = BTreeMap::new();
+        let all_left_rooms: Vec<_> = services()
             .rooms
             .state_cache
-            .get_left_count(&room_id, &sender_user)?;
+            .rooms_left(&sender_user)
+            .collect();
+        for result in all_left_rooms {
+            let (room_id, _) = result?;
 
-        // Left before last sync
-        if Some(since) >= left_count {
-            continue;
-        }
+            {
+                // Get and drop the lock to wait for remaining operations to finish
+                let mutex_insert = Arc::clone(
+                    services()
+                        .globals
+                        .roomid_mutex_insert
+                        .write()
+                        .await
+                        .entry(room_id.clone())
+                        .or_default(),
+                );
+                let insert_lock = mutex_insert.lock().await;
+                drop(insert_lock);
+            }
 
-        if !services().rooms.metadata.exists(&room_id)? {
-            // This is just a rejected invite, not a room we know
-            let event = PduEvent {
-                event_id: EventId::new(services().globals.server_name()).into(),
-                sender: sender_user.clone(),
-                origin_server_ts: utils::millis_since_unix_epoch()
-                    .try_into()
-                    .expect("Timestamp is valid js_int value"),
-                kind: TimelineEventType::RoomMember,
-                content: serde_json::from_str(r#"{ "membership": "leave"}"#).unwrap(),
-                state_key: Some(sender_user.to_string()),
-                unsigned: None,
-                // The following keys are dropped on conversion
-                room_id: Some(room_id.clone()),
-                prev_events: vec![],
-                depth: uint!(1),
-                auth_events: vec![],
-                redacts: None,
-                hashes: EventHash {
-                    sha256: String::new(),
-                },
-                signatures: None,
+            let left_count = services()
+                .rooms
+                .state_cache
+                .get_left_count(&room_id, &sender_user)?;
+
+            // Left before last sync
+            if Some(since) >= left_count {
+                continue;
+            }
+
+            if !services().rooms.metadata.exists(&room_id)? {
+                // This is just a rejected invite, not a room we know
+                let event = PduEvent {
+                    event_id: EventId::new(services().globals.server_name()).into(),
+                    sender: sender_user.clone(),
+                    origin_server_ts: utils::millis_since_unix_epoch()
+                        .try_into()
+                        .expect("Timestamp is valid js_int value"),
+                    kind: TimelineEventType::RoomMember,
+                    content: serde_json::from_str(r#"{ "membership": "leave"}"#).unwrap(),
+                    state_key: Some(sender_user.to_string()),
+                    unsigned: None,
+                    // The following keys are dropped on conversion
+                    room_id: Some(room_id.clone()),
+                    prev_events: vec![],
+                    depth: uint!(1),
+                    auth_events: vec![],
+                    redacts: None,
+                    hashes: EventHash {
+                        sha256: String::new(),
+                    },
+                    signatures: None,
+                };
+
+                left_rooms.insert(
+                    room_id,
+                    LeftRoom {
+                        account_data: RoomAccountData { events: Vec::new() },
+                        timeline: Timeline {
+                            limited: false,
+                            prev_batch: Some(next_batch_string.clone()),
+                            events: Vec::new(),
+                        },
+                        state: State::Before(StateEvents {
+                            events: vec![event.to_sync_state_event()],
+                        }),
+                    },
+                );
+
+                continue;
+            }
+
+            let mut left_state_events = Vec::new();
+
+            let since_shortstatehash = services()
+                .rooms
+                .user
+                .get_token_shortstatehash(&room_id, since)?;
+
+            let since_state_ids = match since_shortstatehash {
+                Some(s) => services().rooms.state_accessor.state_full_ids(s).await?,
+                None => HashMap::new(),
             };
 
+            let left_event_id = match services().rooms.state_accessor.room_state_get_id(
+                &room_id,
+                &StateEventType::RoomMember,
+                sender_user.as_str(),
+            )? {
+                Some(e) => e,
+                None => {
+                    error!("Left room but no left state event");
+                    continue;
+                }
+            };
+
+            let left_shortstatehash = match services()
+                .rooms
+                .state_accessor
+                .pdu_shortstatehash(&left_event_id)?
+            {
+                Some(s) => s,
+                None => {
+                    error!("Leave event has no state");
+                    continue;
+                }
+            };
+
+            let mut left_state_ids = services()
+                .rooms
+                .state_accessor
+                .state_full_ids(left_shortstatehash)
+                .await?;
+
+            let leave_shortstatekey = services().rooms.short.get_or_create_shortstatekey(
+                &StateEventType::RoomMember,
+                sender_user.as_str(),
+            )?;
+
+            left_state_ids.insert(leave_shortstatekey, left_event_id);
+
+            let mut i = 0;
+            for (key, id) in left_state_ids {
+                if full_state || since_state_ids.get(&key) != Some(&id) {
+                    let (event_type, state_key) =
+                        services().rooms.short.get_statekey_from_short(key)?;
+
+                    if !lazy_load_enabled
+                        || event_type != StateEventType::RoomMember
+                        || full_state
+                        // TODO: Delete the following line when this is resolved: https://github.com/vector-im/element-web/issues/22565
+                        || *sender_user == state_key
+                    {
+                        let pdu = match services().rooms.timeline.get_pdu(&id)? {
+                            Some(pdu) => pdu,
+                            None => {
+                                error!("Pdu in state not found: {}", id);
+                                continue;
+                            }
+                        };
+
+                        left_state_events.push(pdu.to_sync_state_event());
+
+                        i += 1;
+                        if i % 100 == 0 {
+                            tokio::task::yield_now().await;
+                        }
+                    }
+                }
+            }
+
             left_rooms.insert(
-                room_id,
+                room_id.clone(),
                 LeftRoom {
                     account_data: RoomAccountData { events: Vec::new() },
                     timeline: Timeline {
@@ -367,286 +469,203 @@ async fn sync_helper(
                         events: Vec::new(),
                     },
                     state: State::Before(StateEvents {
-                        events: vec![event.to_sync_state_event()],
+                        events: left_state_events,
                     }),
                 },
             );
-
-            continue;
         }
 
-        let mut left_state_events = Vec::new();
-
-        let since_shortstatehash = services()
-            .rooms
-            .user
-            .get_token_shortstatehash(&room_id, since)?;
-
-        let since_state_ids = match since_shortstatehash {
-            Some(s) => services().rooms.state_accessor.state_full_ids(s).await?,
-            None => HashMap::new(),
-        };
-
-        let left_event_id = match services().rooms.state_accessor.room_state_get_id(
-            &room_id,
-            &StateEventType::RoomMember,
-            sender_user.as_str(),
-        )? {
-            Some(e) => e,
-            None => {
-                error!("Left room but no left state event");
-                continue;
-            }
-        };
-
-        let left_shortstatehash = match services()
-            .rooms
-            .state_accessor
-            .pdu_shortstatehash(&left_event_id)?
-        {
-            Some(s) => s,
-            None => {
-                error!("Leave event has no state");
-                continue;
-            }
-        };
-
-        let mut left_state_ids = services()
-            .rooms
-            .state_accessor
-            .state_full_ids(left_shortstatehash)
-            .await?;
-
-        let leave_shortstatekey = services()
-            .rooms
-            .short
-            .get_or_create_shortstatekey(&StateEventType::RoomMember, sender_user.as_str())?;
-
-        left_state_ids.insert(leave_shortstatekey, left_event_id);
-
-        let mut i = 0;
-        for (key, id) in left_state_ids {
-            if full_state || since_state_ids.get(&key) != Some(&id) {
-                let (event_type, state_key) =
-                    services().rooms.short.get_statekey_from_short(key)?;
-
-                if !lazy_load_enabled
-                    || event_type != StateEventType::RoomMember
-                    || full_state
-                    // TODO: Delete the following line when this is resolved: https://github.com/vector-im/element-web/issues/22565
-                    || *sender_user == state_key
-                {
-                    let pdu = match services().rooms.timeline.get_pdu(&id)? {
-                        Some(pdu) => pdu,
-                        None => {
-                            error!("Pdu in state not found: {}", id);
-                            continue;
-                        }
-                    };
-
-                    left_state_events.push(pdu.to_sync_state_event());
-
-                    i += 1;
-                    if i % 100 == 0 {
-                        tokio::task::yield_now().await;
-                    }
-                }
-            }
-        }
-
-        left_rooms.insert(
-            room_id.clone(),
-            LeftRoom {
-                account_data: RoomAccountData { events: Vec::new() },
-                timeline: Timeline {
-                    limited: false,
-                    prev_batch: Some(next_batch_string.clone()),
-                    events: Vec::new(),
-                },
-                state: State::Before(StateEvents {
-                    events: left_state_events,
-                }),
-            },
-        );
-    }
-
-    let mut invited_rooms = BTreeMap::new();
-    let all_invited_rooms: Vec<_> = services()
-        .rooms
-        .state_cache
-        .rooms_invited(&sender_user)
-        .collect();
-    for result in all_invited_rooms {
-        let (room_id, invite_state_events) = result?;
-
-        {
-            // Get and drop the lock to wait for remaining operations to finish
-            let mutex_insert = Arc::clone(
-                services()
-                    .globals
-                    .roomid_mutex_insert
-                    .write()
-                    .await
-                    .entry(room_id.clone())
-                    .or_default(),
-            );
-            let insert_lock = mutex_insert.lock().await;
-            drop(insert_lock);
-        }
-
-        let invite_count = services()
+        let mut invited_rooms = BTreeMap::new();
+        let all_invited_rooms: Vec<_> = services()
             .rooms
             .state_cache
-            .get_invite_count(&room_id, &sender_user)?;
+            .rooms_invited(&sender_user)
+            .collect();
+        for result in all_invited_rooms {
+            let (room_id, invite_state_events) = result?;
 
-        // Invited before last sync
-        if Some(since) >= invite_count {
-            continue;
-        }
-
-        invited_rooms.insert(
-            room_id.clone(),
-            InvitedRoom {
-                invite_state: InviteState {
-                    events: invite_state_events,
-                },
-            },
-        );
-    }
-
-    let mut knocked_rooms = BTreeMap::new();
-    let all_knocked_rooms: Vec<_> = services()
-        .rooms
-        .state_cache
-        .rooms_knocked(&sender_user)
-        .collect();
-    for result in all_knocked_rooms {
-        let (room_id, knock_state_events) = result?;
-
-        {
-            // Get and drop the lock to wait for remaining operations to finish
-            let mutex_insert = Arc::clone(
-                services()
-                    .globals
-                    .roomid_mutex_insert
-                    .write()
-                    .await
-                    .entry(room_id.clone())
-                    .or_default(),
-            );
-            let insert_lock = mutex_insert.lock().await;
-            drop(insert_lock);
-        }
-
-        let knock_count = services()
-            .rooms
-            .state_cache
-            .get_knock_count(&room_id, &sender_user)?;
-
-        // knock before last sync
-        if Some(since) >= knock_count {
-            continue;
-        }
-
-        knocked_rooms.insert(
-            room_id.clone(),
-            KnockedRoom {
-                knock_state: KnockState {
-                    events: knock_state_events,
-                },
-            },
-        );
-    }
-
-    for user_id in left_encrypted_users {
-        let dont_share_encrypted_room = services()
-            .rooms
-            .user
-            .get_shared_rooms(vec![sender_user.clone(), user_id.clone()])?
-            .filter_map(|r| r.ok())
-            .filter_map(|other_room_id| {
-                Some(
+            {
+                // Get and drop the lock to wait for remaining operations to finish
+                let mutex_insert = Arc::clone(
                     services()
-                        .rooms
-                        .state_accessor
-                        .room_state_get(&other_room_id, &StateEventType::RoomEncryption, "")
-                        .ok()?
-                        .is_some(),
-                )
-            })
-            .all(|encrypted| !encrypted);
-        // If the user doesn't share an encrypted room with the target anymore, we need to tell
-        // them
-        if dont_share_encrypted_room {
-            device_list_left.insert(user_id);
+                        .globals
+                        .roomid_mutex_insert
+                        .write()
+                        .await
+                        .entry(room_id.clone())
+                        .or_default(),
+                );
+                let insert_lock = mutex_insert.lock().await;
+                drop(insert_lock);
+            }
+
+            let invite_count = services()
+                .rooms
+                .state_cache
+                .get_invite_count(&room_id, &sender_user)?;
+
+            // Invited before last sync
+            if Some(since) >= invite_count {
+                continue;
+            }
+
+            invited_rooms.insert(
+                room_id.clone(),
+                InvitedRoom {
+                    invite_state: InviteState {
+                        events: invite_state_events,
+                    },
+                },
+            );
         }
-    }
 
-    // Remove all to-device events the device received *last time*
-    services()
-        .users
-        .remove_to_device_events(&sender_user, &sender_device, since)?;
+        let mut knocked_rooms = BTreeMap::new();
+        let all_knocked_rooms: Vec<_> = services()
+            .rooms
+            .state_cache
+            .rooms_knocked(&sender_user)
+            .collect();
+        for result in all_knocked_rooms {
+            let (room_id, knock_state_events) = result?;
 
-    let response = sync_events::v3::Response {
-        next_batch: next_batch_string,
-        rooms: Rooms {
-            leave: left_rooms,
-            join: joined_rooms,
-            invite: invited_rooms,
-            knock: knocked_rooms,
-        },
-        presence: Presence {
-            events: presence_updates
-                .into_values()
-                .map(|v| Raw::new(&v).expect("PresenceEvent always serializes successfully"))
-                .collect(),
-        },
-        account_data: GlobalAccountData {
-            events: services()
-                .account_data
-                .global_changes_since(&sender_user, since)?
-                .into_iter()
-                .filter_map(|(_, v)| {
-                    serde_json::from_str(v.json().get())
-                        .map_err(|_| Error::bad_database("Invalid account event in database."))
-                        .ok()
+            {
+                // Get and drop the lock to wait for remaining operations to finish
+                let mutex_insert = Arc::clone(
+                    services()
+                        .globals
+                        .roomid_mutex_insert
+                        .write()
+                        .await
+                        .entry(room_id.clone())
+                        .or_default(),
+                );
+                let insert_lock = mutex_insert.lock().await;
+                drop(insert_lock);
+            }
+
+            let knock_count = services()
+                .rooms
+                .state_cache
+                .get_knock_count(&room_id, &sender_user)?;
+
+            // knock before last sync
+            if Some(since) >= knock_count {
+                continue;
+            }
+
+            knocked_rooms.insert(
+                room_id.clone(),
+                KnockedRoom {
+                    knock_state: KnockState {
+                        events: knock_state_events,
+                    },
+                },
+            );
+        }
+
+        for user_id in left_encrypted_users {
+            let dont_share_encrypted_room = services()
+                .rooms
+                .user
+                .get_shared_rooms(vec![sender_user.clone(), user_id.clone()])?
+                .filter_map(|r| r.ok())
+                .filter_map(|other_room_id| {
+                    Some(
+                        services()
+                            .rooms
+                            .state_accessor
+                            .room_state_get(&other_room_id, &StateEventType::RoomEncryption, "")
+                            .ok()?
+                            .is_some(),
+                    )
                 })
-                .collect(),
-        },
-        device_lists: DeviceLists {
-            changed: device_list_updates.into_iter().collect(),
-            left: device_list_left.into_iter().collect(),
-        },
-        device_one_time_keys_count: services()
-            .users
-            .count_one_time_keys(&sender_user, &sender_device)?,
-        to_device: ToDevice {
-            events: services()
-                .users
-                .get_to_device_events(&sender_user, &sender_device)?,
-        },
-        // Fallback keys are not yet supported
-        device_unused_fallback_key_types: None,
-    };
-
-    // TODO: Retry the endpoint instead of returning (waiting for #118)
-    if !full_state
-        && response.rooms.is_empty()
-        && response.presence.is_empty()
-        && response.account_data.is_empty()
-        && response.device_lists.is_empty()
-        && response.to_device.is_empty()
-    {
-        // Hang a few seconds so requests are not spammed
-        // Stop hanging if new info arrives
-        let mut duration = body.timeout.unwrap_or_default();
-        if duration.as_secs() > 30 {
-            duration = Duration::from_secs(30);
+                .all(|encrypted| !encrypted);
+            // If the user doesn't share an encrypted room with the target anymore, we need to tell
+            // them
+            if dont_share_encrypted_room {
+                device_list_left.insert(user_id);
+            }
         }
-        let _ = tokio::time::timeout(duration, watcher).await;
-        Ok((response, false))
-    } else {
-        Ok((response, since != next_batch)) // Only cache if we made progress
+
+        // Remove all to-device events the device received *last time*
+        services()
+            .users
+            .remove_to_device_events(&sender_user, &sender_device, since)?;
+
+        let response = sync_events::v3::Response {
+            next_batch: next_batch_string,
+            rooms: Rooms {
+                leave: left_rooms,
+                join: joined_rooms,
+                invite: invited_rooms,
+                knock: knocked_rooms,
+            },
+            presence: Presence {
+                events: presence_updates
+                    .into_values()
+                    .map(|v| Raw::new(&v).expect("PresenceEvent always serializes successfully"))
+                    .collect(),
+            },
+            account_data: GlobalAccountData {
+                events: services()
+                    .account_data
+                    .global_changes_since(&sender_user, since)?
+                    .into_iter()
+                    .filter_map(|(_, v)| {
+                        serde_json::from_str(v.json().get())
+                            .map_err(|_| Error::bad_database("Invalid account event in database."))
+                            .ok()
+                    })
+                    .collect(),
+            },
+            device_lists: DeviceLists {
+                changed: device_list_updates.into_iter().collect(),
+                left: device_list_left.into_iter().collect(),
+            },
+            device_one_time_keys_count: services()
+                .users
+                .count_one_time_keys(&sender_user, &sender_device)?,
+            to_device: ToDevice {
+                events: services()
+                    .users
+                    .get_to_device_events(&sender_user, &sender_device)?,
+            },
+            // Fallback keys are not yet supported
+            device_unused_fallback_key_types: None,
+        };
+
+        // TODO: Retry the endpoint instead of returning (waiting for #118)
+        if !full_state
+            && response.rooms.is_empty()
+            && response.presence.is_empty()
+            && response.account_data.is_empty()
+            && response.device_lists.is_empty()
+            && response.to_device.is_empty()
+        {
+            let watcher = services().globals.watch(&sender_user, &sender_device);
+            let watcher = Box::pin(watcher);
+            let mut duration = body.timeout.unwrap_or_default();
+            if duration.as_secs() > 30 {
+                duration = Duration::from_secs(30);
+            }
+            let mut watcher_receiver = watcher;
+            let _ = tokio::time::timeout(duration, async {
+                tokio::select! {
+                    _ = &mut watcher_receiver => {},
+                    res = typing_receiver.recv() => {
+                        if let Ok(room_id) = res {
+                            // TODO: This is not very efficient, we should only have one typing update per room
+                            if services().rooms.state_cache.is_joined(&sender_user, &room_id).unwrap_or(false) {
+                            }
+                        }
+                    },
+                }
+            })
+            .await;
+            continue;
+        } else {
+            return Ok((response, since != next_batch)); // Only cache if we made progress
+        }
     }
 }
 

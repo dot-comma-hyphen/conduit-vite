@@ -4,10 +4,9 @@ use std::{
 };
 
 use lru_cache::LruCache;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::Mutex;
 
 use crate::{Config, Result};
-use tokio::sync::RwLock;
 
 pub mod account_data;
 pub mod admin;
@@ -67,11 +66,7 @@ impl Services {
                 edus: rooms::edus::Service {
                     presence: rooms::edus::presence::Service { db },
                     read_receipt: rooms::edus::read_receipt::Service { db },
-                    typing: rooms::edus::typing::Service {
-                        typing: RwLock::new(BTreeMap::new()),
-                        last_typing_update: RwLock::new(BTreeMap::new()),
-                        typing_update_sender: broadcast::channel(100).0,
-                    },
+                    typing: rooms::edus::typing::Service::new(),
                 },
                 event_handler: rooms::event_handler::Service,
                 helpers: rooms::helpers::Service,
