@@ -36,11 +36,12 @@ use ruma::{
         push_rules::PushRulesEvent, receipt::ReceiptType, AnySyncEphemeralRoomEvent,
         GlobalAccountDataEventType,
     },
-    push, uint, MilliSecondsSinceUnixEpoch, OwnedServerName, OwnedUserId, ServerName, UInt, UserId,
+    push, uint, MilliSecondsSinceUnixEpoch, OwnedRoomId, OwnedServerName, OwnedUserId, ServerName,
+    UInt, UserId,
 };
 use tokio::{
     select,
-    sync::{mpsc, Mutex, Semaphore},
+    sync::{mpsc, Mutex, RwLock, Semaphore},
 };
 use tracing::{debug, error, warn};
 
@@ -87,6 +88,8 @@ pub enum SendingEventType {
 
 pub struct Service {
     db: &'static dyn Data,
+    pub federation_typers_stop:
+        RwLock<BTreeMap<OwnedServerName, BTreeMap<OwnedRoomId, Vec<OwnedUserId>>>>,
 
     /// The state for a given state hash.
     pub(super) maximum_requests: Arc<Semaphore>,
@@ -103,6 +106,7 @@ impl Service {
             db,
             sender,
             receiver: Mutex::new(receiver),
+            federation_typers_stop: RwLock::new(BTreeMap::new()),
             maximum_requests: Arc::new(Semaphore::new(config.max_concurrent_requests as usize)),
         })
     }
@@ -117,7 +121,7 @@ impl Service {
     async fn handler(self: Arc<Self>) -> Result<()> {
         let mut receiver = self.receiver.lock().await;
         let running_destinations = Arc::new(Mutex::new(HashSet::new()));
-        let mut interval = tokio::time::interval(Duration::from_secs(3));
+        let mut interval = tokio::time::interval(Duration::from_millis(800));
 
         loop {
             select! {
@@ -201,6 +205,8 @@ impl Service {
                 break;
             }
 
+            let had_db_events = !active_events.is_empty() || !new_events.is_empty();
+
             if let Err(e) = self.db.mark_as_active(&new_events) {
                 error!("Failed to mark new events as active, trying again later: {e}");
                 break;
@@ -227,6 +233,10 @@ impl Service {
                         "Failed to delete active requests for {:?}, trying again later: {e}",
                         outgoing_kind
                     );
+                    break;
+                }
+
+                if !had_db_events {
                     break;
                 }
             } else {
@@ -322,6 +332,18 @@ impl Service {
 
                 if events.len() >= 20 {
                     break 'outer;
+                }
+            }
+        }
+
+        if let Some(stopped_typing) = self.federation_typers_stop.write().await.remove(server_name) {
+            for (room_id, users) in stopped_typing {
+                for user_id in users {
+                    events.push(Edu::Typing(federation::transactions::edu::TypingContent {
+                        room_id: room_id.clone(),
+                        user_id,
+                        typing: false,
+                    }));
                 }
             }
         }
@@ -730,7 +752,7 @@ impl Service {
         Ok(())
     }
 
-    fn get_servers_in_room(&self, room_id: &ruma::RoomId) -> Result<HashSet<OwnedServerName>> {
+    pub fn get_servers_in_room(&self, room_id: &ruma::RoomId) -> Result<HashSet<OwnedServerName>> {
         let mut servers: HashSet<OwnedServerName> = services()
             .rooms
             .state_cache
@@ -743,28 +765,7 @@ impl Service {
         Ok(servers)
     }
 
-    #[tracing::instrument(skip(self, user_id, room_id, typing))]
-    pub fn send_federation_typing_edu(
-        &self,
-        user_id: &UserId,
-        room_id: &ruma::RoomId,
-        typing: bool,
-    ) -> Result<()> {
-        let servers = self.get_servers_in_room(room_id)?;
-
-        if servers.is_empty() {
-            return Ok(());
-        }
-
-        self.send_federation_edu(
-            servers.into_iter(),
-            Edu::Typing(federation::transactions::edu::TypingContent {
-                room_id: room_id.to_owned(),
-                user_id: user_id.to_owned(),
-                typing,
-            }),
-        )
-    }
+    
 
     #[tracing::instrument(skip(self, user_id, room_id, event))]
     pub fn send_federation_receipt_edu(

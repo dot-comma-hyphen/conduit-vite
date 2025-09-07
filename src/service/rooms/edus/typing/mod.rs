@@ -26,10 +26,6 @@ impl Service {
             .insert(room_id.to_owned(), services().globals.next_count()?);
         let _ = self.typing_update_sender.send(room_id.to_owned());
 
-        services()
-            .sending
-            .send_federation_typing_edu(user_id, room_id, true)?;
-
         Ok(())
     }
 
@@ -47,9 +43,23 @@ impl Service {
             .insert(room_id.to_owned(), services().globals.next_count()?);
         let _ = self.typing_update_sender.send(room_id.to_owned());
 
-        services()
+        let servers = services()
             .sending
-            .send_federation_typing_edu(user_id, room_id, false)?;
+            .get_servers_in_room(room_id)
+            .expect("failed to get servers in room");
+
+        for server in servers {
+            services()
+                .sending
+                .federation_typers_stop
+                .write()
+                .await
+                .entry(server)
+                .or_default()
+                .entry(room_id.to_owned())
+                .or_default()
+                .push(user_id.to_owned());
+        }
 
         Ok(())
     }
@@ -86,7 +96,20 @@ impl Service {
             let room = typing.entry(room_id.to_owned()).or_default();
             for user in removable {
                 room.remove(&user);
-                services().sending.send_federation_typing_edu(&user, room_id, false)?;
+                if let Ok(servers) = services().sending.get_servers_in_room(room_id) {
+                    for server in servers {
+                        services()
+                            .sending
+                            .federation_typers_stop
+                            .write()
+                            .await
+                            .entry(server)
+                            .or_default()
+                            .entry(room_id.to_owned())
+                            .or_default()
+                            .push(user.to_owned());
+                    }
+                }
             }
             self.last_typing_update
                 .write()
