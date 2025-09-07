@@ -550,19 +550,36 @@ impl Service {
 
     // Parse chat messages from the admin room into an AdminCommand object
     fn parse_admin_command(&self, command_line: &str) -> std::result::Result<AdminCommand, String> {
-        let mut command_line = command_line.to_string();
         let conduit_user = services().globals.server_user();
-        let prefix = format!("{conduit_user}:");
+        let localpart = conduit_user.localpart();
 
-        if command_line.starts_with(&prefix) {
-            let command_part = &command_line[prefix.len()..];
-            if !command_part.starts_with(' ') && !command_part.is_empty() {
-                command_line.insert(prefix.len(), ' ');
+        // List of possible prefixes
+        let prefixes = [
+            format!("{conduit_user}:"), // @conduit:server.name:
+            format!("{conduit_user} "), // @conduit:server.name
+            format!("{localpart}:"),    // conduit:
+            format!("{localpart} "),    // conduit
+        ];
+
+        let mut processed_command = None;
+
+        for prefix in &prefixes {
+            if command_line.starts_with(prefix) {
+                let command_part = command_line.strip_prefix(prefix).unwrap().trim_start();
+                processed_command = Some(format!("{} {}", format!("{conduit_user}:"), command_part));
+                break;
             }
         }
 
+        // Handle the case where it's just the username
+        if command_line.trim() == conduit_user.as_str() || command_line.trim() == localpart {
+            processed_command = Some(format!("{}: --help", conduit_user));
+        }
+
+        let final_command_line = processed_command.unwrap_or_else(|| command_line.to_string());
+
         // Note: argv[0] is `@conduit:servername:`, which is treated as the main command
-        let mut argv = match shell_words::split(&command_line) {
+        let mut argv = match shell_words::split(&final_command_line) {
             Ok(args) => args,
             Err(e) => return Err(format!("Failed to parse admin command: {e}")),
         };

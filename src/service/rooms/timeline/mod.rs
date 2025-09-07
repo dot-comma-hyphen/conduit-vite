@@ -501,7 +501,16 @@ impl Service {
                         && services().globals.emergency_password().is_none();
 
                     if let Some(admin_room) = services().admin.get_admin_room()? {
-                        if !from_conduit
+                        let localpart = server_user.localpart();
+                        let to_conduit = body.starts_with(&format!("{server_user}:"))
+                            || body.starts_with(&format!("{server_user} "))
+                            || body.starts_with(&format!("{localpart}:"))
+                            || body.starts_with(&format!("{localpart} "))
+                            || body.trim() == server_user.as_str()
+                            || body.trim() == localpart;
+
+                        if to_conduit
+                            && !from_conduit
                             && admin_room == *pdu.room_id()
                             && services()
                                 .rooms
@@ -537,15 +546,7 @@ impl Service {
                                     body.insert_str(0, &format!("{server_user}: "));
                                 }
                             }
-
-                            let to_conduit = body.starts_with(&format!("{server_user}: "))
-                                || body.starts_with(&format!("{server_user} "))
-                                || body == format!("{server_user}:")
-                                || body == server_user.as_str();
-
-                            if to_conduit {
-                                services().admin.process_message(body);
-                            }
+                            services().admin.process_message(body);
                         }
                     }
                 }
