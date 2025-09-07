@@ -660,7 +660,7 @@ impl Service {
                 );
                 RoomMessageEventContent::text_plain(output).into()
             }
-            AdminCommand::RoomInfo { room_id_or_alias } => {
+			AdminCommand::RoomInfo { room_id_or_alias } => {
                 let room_id = if room_id_or_alias.starts_with('!') {
                     RoomId::parse(&room_id_or_alias).map_err(|_| {
                         Error::AdminCommand("Invalid room ID")
@@ -690,7 +690,7 @@ impl Service {
                 message.push_str("---------------------------------\n");
                 message.push_str(&format!("Room ID: {}\n", room_id));
 
-                if let Some(event) = services().rooms.state_accessor.get_state_event(
+                if let Some(event) = services().rooms.state_accessor.state_get(
                     &room_id,
                     ruma::events::StateEventType::RoomCanonicalAlias,
                     "",
@@ -706,7 +706,7 @@ impl Service {
                 }
 
 
-                if let Some(event) = services().rooms.state_accessor.get_state_event(
+                if let Some(event) = services().rooms.state_accessor.state_get(
                     &room_id,
                     ruma::events::StateEventType::RoomName,
                     "",
@@ -716,7 +716,7 @@ impl Service {
                     message.push_str(&format!("Name: {}\n", content.name));
                 }
 
-                if let Some(event) = services().rooms.state_accessor.get_state_event(
+                if let Some(event) = services().rooms.state_accessor.state_get(
                     &room_id,
                     ruma::events::StateEventType::RoomTopic,
                     "",
@@ -726,7 +726,7 @@ impl Service {
                     message.push_str(&format!("Topic: {}\n", content.topic));
                 }
 
-                if let Some(event) = services().rooms.state_accessor.get_state_event(
+                if let Some(event) = services().rooms.state_accessor.state_get(
                     &room_id,
                     ruma::events::StateEventType::RoomAvatar,
                     "",
@@ -741,30 +741,46 @@ impl Service {
                 message.push_str("---------------------------------\n");
                 message.push_str("State:\n");
 
-                if let Some(event) = services().rooms.state_accessor.get_state_event(
+                if let Some(event) = services().rooms.state_accessor.state_get(
                     &room_id,
                     ruma::events::StateEventType::RoomJoinRules,
                     "",
                 )? {
                     let content = serde_json::from_str::<RoomJoinRulesEventContent>(event.content.get())
                         .map_err(|_| Error::bad_database("Invalid join rules event"))?;
-                    message.push_str(&format!("- Join Rule: {}\n", content.join_rule));
+                    let join_rule_str = match content.join_rule {
+                        ruma::events::room::join_rules::JoinRule::Public => "Public",
+                        ruma::events::room::join_rules::JoinRule::Knock => "Knock",
+                        ruma::events::room::join_rules::JoinRule::Invite => "Invite",
+                        ruma::events::room::join_rules::JoinRule::Private => "Private",
+                        ruma::events::room::join_rules::JoinRule::Restricted => "Restricted",
+                        ruma::events::room::join_rules::JoinRule::KnockRestricted => "KnockRestricted",
+                        _ => "Custom",
+                    };
+                    message.push_str(&format!("- Join Rule: {}\n", join_rule_str));
                 }
 
-                if let Some(event) = services().rooms.state_accessor.get_state_event(
+                if let Some(event) = services().rooms.state_accessor.state_get(
                     &room_id,
                     ruma::events::StateEventType::RoomHistoryVisibility,
                     "",
                 )? {
                     let content = serde_json::from_str::<RoomHistoryVisibilityEventContent>(event.content.get())
                         .map_err(|_| Error::bad_database("Invalid history visibility event"))?;
+                    let history_visibility_str = match content.history_visibility {
+                        ruma::events::room::history_visibility::HistoryVisibility::Invited => "Invited",
+                        ruma::events::room::history_visibility::HistoryVisibility::Joined => "Joined",
+                        ruma::events::room::history_visibility::HistoryVisibility::Shared => "Shared",
+                        ruma::events::room::history_visibility::HistoryVisibility::WorldReadable => "WorldReadable",
+                        _ => "Custom",
+                    };
                     message.push_str(&format!(
                         "- Visibility: {}\n",
-                        content.history_visibility
+                        history_visibility_str
                     ));
                 }
 
-                if let Some(_event) = services().rooms.state_accessor.get_state_event(
+                if let Some(_event) = services().rooms.state_accessor.state_get(
                     &room_id,
                     ruma::events::StateEventType::RoomEncryption,
                     "",
@@ -776,7 +792,7 @@ impl Service {
 
                 message.push_str("---------------------------------\n");
 
-                let members = services().rooms.state_cache.room_members(&room_id)?;
+                let members: Vec<ruma::OwnedUserId> = services().rooms.state_cache.room_members(&room_id).filter_map(Result::ok).collect();
                 let power_levels = services()
                     .rooms
                     .state_accessor
