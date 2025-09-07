@@ -27,7 +27,7 @@ impl<T> Deref for Ruma<T> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RumaResponse<T>(pub T);
 
 impl<T> From<T> for RumaResponse<T> {
