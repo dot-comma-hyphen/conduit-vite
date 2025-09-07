@@ -510,25 +510,27 @@ impl Service {
                         {
                             let mut body = body;
                             if body.starts_with('!') {
-                                let mut bot_users = 0;
-                                for member in
-                                    services().rooms.state_cache.room_members(&admin_room)?
+                                let mut other_bot_users = 0;
+                                for member_result in
+                                    services().rooms.state_cache.room_members(&admin_room)
                                 {
-                                    let member = member?;
-                                    if services()
-                                        .appservice
-                                        .read()
-                                        .await
-                                        .values()
-                                        .any(|appservice| appservice.is_user_match(&member))
-                                    {
-                                        bot_users += 1;
+                                    let member = member_result?;
+                                    if member != *server_user {
+                                        if services()
+                                            .appservice
+                                            .read()
+                                            .await
+                                            .values()
+                                            .any(|appservice| appservice.is_user_match(&member))
+                                        {
+                                            other_bot_users += 1;
+                                        }
                                     }
                                 }
 
-                                if bot_users <= 1 {
+                                if other_bot_users == 0 {
                                     body.insert_str(0, &format!("{server_user}: "));
-                                }
+                                 }
                             }
 
                             let to_conduit = body.starts_with(&format!("{server_user}: "))
