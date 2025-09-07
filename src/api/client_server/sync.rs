@@ -1312,10 +1312,9 @@ fn share_encrypted_room(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services;
+    use crate::{services, utils};
     use ruma::{
-        api::client::{presence::PresenceState, sync::sync_events},
-        events::AnyEphemeralRoomEvent,
+        api::client::sync::sync_events, events::AnyEphemeralRoomEvent, presence::PresenceState,
     };
     use std::time::Duration;
     use tokio::time::timeout;
@@ -1326,13 +1325,13 @@ mod tests {
         let (user, room_id) = services()
             .globals
             .server_user()
-            .await
             .expect("Failed to create user");
 
         // Start a sync request in the background
         let mut sync_request = sync_events::v3::Request::new();
         sync_request.since = Some("0".to_owned());
         sync_request.timeout = Some(Duration::from_secs(10));
+        sync_request.set_presence = PresenceState::Online;
 
         let ruma_req = Ruma {
             body: sync_request,
