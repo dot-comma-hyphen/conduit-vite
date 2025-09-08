@@ -353,6 +353,11 @@ impl Service {
         self.db.set_blurhash(user_id, blurhash)
     }
 
+    /// Sets a new email or removes it if email is None.
+    pub fn set_email(&self, user_id: &UserId, email: Option<String>) -> Result<()> {
+        self.db.set_email(user_id, email)
+    }
+
     /// Adds a new device to a user.
     pub fn create_device(
         &self,

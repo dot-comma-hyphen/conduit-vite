@@ -74,6 +74,7 @@ pub struct KeyValueDatabase {
     pub(super) userid_displayname: Arc<dyn KvTree>,
     pub(super) userid_avatarurl: Arc<dyn KvTree>,
     pub(super) userid_blurhash: Arc<dyn KvTree>,
+    pub(super) userid_email: Arc<dyn KvTree>,
     pub(super) userdeviceid_token: Arc<dyn KvTree>,
     pub(super) userdeviceid_metadata: Arc<dyn KvTree>, // This is also used to check if a device exists
     pub(super) userid_devicelistversion: Arc<dyn KvTree>, // DevicelistVersion = u64
@@ -306,6 +307,7 @@ impl KeyValueDatabase {
             userid_displayname: builder.open_tree("userid_displayname")?,
             userid_avatarurl: builder.open_tree("userid_avatarurl")?,
             userid_blurhash: builder.open_tree("userid_blurhash")?,
+            userid_email: builder.open_tree("userid_email")?,
             userdeviceid_token: builder.open_tree("userdeviceid_token")?,
             userdeviceid_metadata: builder.open_tree("userdeviceid_metadata")?,
             userid_devicelistversion: builder.open_tree("userid_devicelistversion")?,

@@ -27,6 +27,7 @@ rust-version = "1.85.0"
 workspace = true
 
 [dependencies]
+ldap3 = { version = "0.12.0-beta.2", default-features = false, features = ["sync", "tls-rustls-ring"] }
 # Web framework
 axum = { version = "0.8", default-features = false, features = [
   "form",
@@ -34,6 +35,7 @@ axum = { version = "0.8", default-features = false, features = [
   "http2",
   "json",
   "matched-path",
+  "query",
 ], optional = true }
 axum-extra = { version = "0.10", features = ["typed-header"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }

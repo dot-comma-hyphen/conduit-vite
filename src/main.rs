@@ -106,6 +106,29 @@ async fn main() {
 
     config.warn_deprecated();
 
+    if config.ldap.enabled {
+        info!("Attempting to connect to LDAP server");
+        match ldap3::LdapConn::new(&config.ldap.uri) {
+            Ok(mut ldap) => {
+                ldap.simple_bind(&config.ldap.bind_dn, &config.ldap.bind_password).unwrap();
+                match ldap.simple_bind(&config.ldap.bind_dn, &config.ldap.bind_password) {
+                    Ok(_) => {
+                        info!("Successfully connected and bound to LDAP server");
+                        ldap.unbind().unwrap();
+                    }
+                    Err(e) => {
+                        error!("Failed to bind to LDAP server: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to connect to LDAP server: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
     let jaeger = if config.allow_jaeger {
         opentelemetry::global::set_text_map_propagator(
             opentelemetry_jaeger_propagator::Propagator::new(),
@@ -461,6 +484,7 @@ fn routes(config: &Config) -> Router {
             get(initial_sync),
         )
         .route("/", get(it_works))
+        
         .fallback(not_found);
 
     if config.allow_federation {

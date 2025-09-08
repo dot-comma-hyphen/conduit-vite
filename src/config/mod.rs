@@ -17,7 +17,10 @@ use url::Url;
 use crate::Error;
 
 mod proxy;
+mod ldap;
+
 use self::proxy::ProxyConfig;
+pub use self::ldap::LdapConfig;
 
 const SHA256_HEX_LENGTH: u8 = 64;
 
@@ -94,6 +97,9 @@ pub struct IncompleteConfig {
 
     pub emergency_password: Option<String>,
 
+    #[serde(default)]
+    pub ldap: LdapConfig,
+
     #[serde(flatten)]
     pub catchall: BTreeMap<String, IgnoredAny>,
 }
@@ -140,6 +146,8 @@ pub struct Config {
 
     pub emergency_password: Option<String>,
 
+    pub ldap: LdapConfig,
+
     pub catchall: BTreeMap<String, IgnoredAny>,
 }
 
@@ -185,6 +193,7 @@ impl From<IncompleteConfig> for Config {
             turn,
             media,
             emergency_password,
+            ldap,
             catchall,
         } = val;
 
@@ -282,6 +291,7 @@ impl From<IncompleteConfig> for Config {
             turn,
             media,
             emergency_password,
+            ldap,
             catchall,
         }
     }

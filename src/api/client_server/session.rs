@@ -46,7 +46,7 @@ pub async fn login_route(body: Ruma<login::v3::Request>) -> Result<login::v3::Re
     #![allow(deprecated)]
     // Validate login method
     // TODO: Other login methods
-    let user_id = match &body.login_info {
+    let (user_id, password) = match &body.login_info {
         login::v3::LoginInfo::Password(login::v3::Password {
             identifier,
             password,
@@ -66,39 +66,7 @@ pub async fn login_route(body: Ruma<login::v3::Request>) -> Result<login::v3::Re
                 return Err(Error::BadRequest(ErrorKind::forbidden(), "Bad login type."));
             }
             .map_err(|_| Error::BadRequest(ErrorKind::InvalidUsername, "Username is invalid."))?;
-
-            if services().appservice.is_exclusive_user_id(&user_id).await {
-                return Err(Error::BadRequest(
-                    ErrorKind::Exclusive,
-                    "User id reserved by appservice.",
-                ));
-            }
-
-            let hash = services()
-                .users
-                .password_hash(&user_id)?
-                .ok_or(Error::BadRequest(
-                    ErrorKind::forbidden(),
-                    "Wrong username or password.",
-                ))?;
-
-            if hash.is_empty() {
-                return Err(Error::BadRequest(
-                    ErrorKind::UserDeactivated,
-                    "The user has been deactivated",
-                ));
-            }
-
-            let hash_matches = argon2::verify_encoded(&hash, password.as_bytes()).unwrap_or(false);
-
-            if !hash_matches {
-                return Err(Error::BadRequest(
-                    ErrorKind::forbidden(),
-                    "Wrong username or password.",
-                ));
-            }
-
-            user_id
+            (user_id, Some(password.clone()))
         }
         login::v3::LoginInfo::Token(login::v3::Token { token }) => {
             if let Some(jwt_decoding_key) = services().globals.jwt_decoding_key() {
@@ -122,7 +90,7 @@ pub async fn login_route(body: Ruma<login::v3::Request>) -> Result<login::v3::Re
                     ));
                 }
 
-                user_id
+                (user_id, None)
             } else {
                 return Err(Error::BadRequest(
                     ErrorKind::Unknown,
@@ -161,7 +129,7 @@ pub async fn login_route(body: Ruma<login::v3::Request>) -> Result<login::v3::Re
                 ));
             }
 
-            user_id
+            (user_id, None)
         }
         _ => {
             warn!("Unsupported or unknown login type: {:?}", &body.login_info);
@@ -171,6 +139,69 @@ pub async fn login_route(body: Ruma<login::v3::Request>) -> Result<login::v3::Re
             ));
         }
     };
+
+    if let Some(password) = password {
+        let mut ldap_auth_success = false;
+        if services().globals.config.ldap.enabled {
+            match services().ldap.find_ldap_user(user_id.localpart()) {
+                Ok(ldap_user) => {
+                    let mut ldap = ldap3::LdapConn::new(&services().globals.config.ldap.uri)?;
+                    if ldap
+                        .simple_bind(&ldap_user.dn, &password)
+                        .is_ok()
+                    {
+                        if !services().users.exists(&user_id)? {
+                            // User does not exist, create it
+                            services().users.create(
+                                &user_id,
+                                None,
+                            )?;
+                            services().users.set_displayname(&user_id, Some(ldap_user.displayname))?;
+                            services().users.set_email(&user_id, Some(ldap_user.email))?;
+                        }
+                        ldap_auth_success = true;
+                    }
+                }
+                Err(_) => {
+                    // User not found in LDAP, fall through to normal password check
+                }
+            }
+        }
+
+        if !ldap_auth_success {
+            if services().appservice.is_exclusive_user_id(&user_id).await {
+                return Err(Error::BadRequest(
+                    ErrorKind::Exclusive,
+                    "User id reserved by appservice.",
+                ));
+            }
+
+            let hash = services()
+                .users
+                .password_hash(&user_id)?
+                .ok_or(Error::BadRequest(
+                    ErrorKind::forbidden(),
+                    "Wrong username or password.",
+                ))?;
+
+            if hash.is_empty() {
+                return Err(Error::BadRequest(
+                    ErrorKind::UserDeactivated,
+                    "The user has been deactivated",
+                ));
+            }
+
+            let hash_matches = argon2::verify_encoded(&hash, password.as_bytes()).unwrap_or(false);
+
+            if !hash_matches {
+                return Err(Error::BadRequest(
+                    ErrorKind::forbidden(),
+                    "Wrong username or password.",
+                ));
+            }
+        }
+    }
+
 
     // Generate new device id if the user didn't specify one
     let device_id = body
