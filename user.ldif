@@ -1,0 +1,11 @@
+dn: ou=users,dc=conduit,dc=rs
+objectClass: organizationalUnit
+ou: users
+
+dn: uid=testuser,ou=users,dc=conduit,dc=rs
+objectClass: inetOrgPerson
+cn: Test User
+sn: User
+uid: testuser
+mail: testuser@conduit.rs
+userPassword: password

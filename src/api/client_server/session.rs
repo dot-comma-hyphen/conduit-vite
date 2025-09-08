@@ -1,5 +1,6 @@
 use super::{DEVICE_ID_LENGTH, TOKEN_LENGTH};
 use crate::{services, utils, Error, Result, Ruma};
+use ldap3::LdapConn;
 use ruma::{
     api::client::{
         error::ErrorKind,
@@ -141,64 +142,14 @@ pub async fn login_route(body: Ruma<login::v3::Request>) -> Result<login::v3::Re
     };
 
     if let Some(password) = password {
-        let mut ldap_auth_success = false;
-        if services().globals.config.ldap.enabled {
-            match services().ldap.find_ldap_user(user_id.localpart()) {
-                Ok(ldap_user) => {
-                    let mut ldap = ldap3::LdapConn::new(&services().globals.config.ldap.uri)?;
-                    if ldap
-                        .simple_bind(&ldap_user.dn, &password)
-                        .is_ok()
-                    {
-                        if !services().users.exists(&user_id)? {
-                            // User does not exist, create it
-                            services().users.create(
-                                &user_id,
-                                None,
-                            )?;
-                            services().users.set_displayname(&user_id, Some(ldap_user.displayname))?;
-                            services().users.set_email(&user_id, Some(ldap_user.email))?;
-                        }
-                        ldap_auth_success = true;
-                    }
-                }
-                Err(_) => {
-                    // User not found in LDAP, fall through to normal password check
-                }
-            }
-        }
-
-        if !ldap_auth_success {
-            if services().appservice.is_exclusive_user_id(&user_id).await {
-                return Err(Error::BadRequest(
-                    ErrorKind::Exclusive,
-                    "User id reserved by appservice.",
-                ));
-            }
-
-            let hash = services()
-                .users
-                .password_hash(&user_id)?
-                .ok_or(Error::BadRequest(
-                    ErrorKind::forbidden(),
-                    "Wrong username or password.",
-                ))?;
-
-            if hash.is_empty() {
-                return Err(Error::BadRequest(
-                    ErrorKind::UserDeactivated,
-                    "The user has been deactivated",
-                ));
-            }
-
-            let hash_matches = argon2::verify_encoded(&hash, password.as_bytes()).unwrap_or(false);
-
-            if !hash_matches {
-                return Err(Error::BadRequest(
-                    ErrorKind::forbidden(),
-                    "Wrong username or password.",
-                ));
-            }
+        authenticate_user(&user_id, &password).await?;
+    } else {
+        // No password, token login
+        if services().appservice.is_exclusive_user_id(&user_id).await {
+            return Err(Error::BadRequest(
+                ErrorKind::Exclusive,
+                "User id reserved by appservice.",
+            ));
         }
     }
 
@@ -245,6 +196,95 @@ pub async fn login_route(body: Ruma<login::v3::Request>) -> Result<login::v3::Re
         expires_in: None,
     })
 }
+
+async fn authenticate_user(user_id: &UserId, password: &str) -> Result<()> {
+    if services().globals.config.ldap.enabled {
+        if let Ok(ldap_user) = services().ldap.find_ldap_user(user_id.localpart()).await {
+            // User was found in LDAP, so we MUST authenticate against LDAP.
+            let ldap_config = services().globals.config.ldap.clone();
+            let password_clone = password.to_owned();
+            let user_id_clone = user_id.to_owned();
+
+            let bind_result = tokio::task::spawn_blocking(move || {
+                let mut ldap = LdapConn::new(&ldap_config.uri)?;
+                ldap.simple_bind(&ldap_user.dn, &password_clone)
+            })
+            .await;
+
+            match bind_result {
+                Ok(Ok(ldap_result)) => {
+                    match ldap_result.success() {
+                        Ok(_) => {
+                            // LDAP authentication succeeded
+                            if !services().users.exists(&user_id_clone)? {
+                                services().users.create(&user_id_clone, None)?;
+                                services()
+                                    .users
+                                    .set_displayname(&user_id_clone, Some(ldap_user.displayname))?;
+                                services().users.set_email(&user_id_clone, Some(ldap_user.email))?;
+                            }
+                            return Ok(());
+                        }
+                        Err(e) => {
+                            // LDAP authentication failed
+                            warn!("LDAP bind failed for user {}: {}", user_id_clone, e);
+                            return Err(Error::BadRequest(
+                                ErrorKind::forbidden(),
+                                "Wrong username or password.",
+                            ));
+                        }
+                    }
+                }
+                Ok(Err(e)) => {
+                    // LDAP connection failed
+                    warn!("LDAP connection failed for user {}: {}", user_id_clone, e);
+                    return Err(Error::BadRequest(
+                        ErrorKind::forbidden(),
+                        "Wrong username or password.",
+                    ));
+                }
+                Err(e) => {
+                    // Task failed
+                    warn!("LDAP task failed for user {}: {}", user_id_clone, e);
+                    return Err(Error::BadRequest(
+                        ErrorKind::forbidden(),
+                        "Wrong username or password.",
+                    ));
+                }
+            }
+        }
+    }
+
+    // Fallback to local auth
+    let hash = services()
+        .users
+        .password_hash(user_id)?
+        .ok_or(Error::BadRequest(
+            ErrorKind::forbidden(),
+            "Wrong username or password.",
+        ))?;
+
+    if hash.is_empty() {
+        // If the user exists but has no password (e.g., created via LDAP),
+        // this prevents them from logging in with any password.
+        return Err(Error::BadRequest(
+            ErrorKind::forbidden(),
+            "Wrong username or password.",
+        ));
+    }
+
+    let hash_matches = argon2::verify_encoded(&hash, password.as_bytes()).unwrap_or(false);
+
+    if !hash_matches {
+        return Err(Error::BadRequest(
+            ErrorKind::forbidden(),
+            "Wrong username or password.",
+        ));
+    }
+
+    Ok(())
+}
+
 
 /// # `POST /_matrix/client/r0/logout`
 ///
