@@ -210,6 +210,10 @@ name = "conduit"
 path = "src/main.rs"
 required-features = ["conduit_bin"]
 
+[[bin]]
+name = "conduit-admin"
+path = "src/bin/admin.rs"
+
 [lib]
 name = "conduit"
 path = "src/lib.rs"

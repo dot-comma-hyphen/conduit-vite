@@ -1121,6 +1121,7 @@ impl KeyValueDatabase {
         db.presenceid_presence.clear()?;
 
         services().admin.start_handler();
+        services().admin_socket.start();
 
         // Set emergency access for the conduit user
         match set_emergency_access() {

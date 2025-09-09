@@ -25,6 +25,8 @@
 database_backend = "rocksdb"
 # This is the only directory where Conduit will save its data
 database_path = "/var/lib/matrix-conduit/"
+# The path to the unix socket for the admin cli
+#unix_socket_path = "/var/lib/matrix-conduit/admin.sock"
 
 # The port Conduit will be running on. You need to set up a reverse proxy in
 # your web server (e.g. apache or nginx), so all requests to /_matrix on port
