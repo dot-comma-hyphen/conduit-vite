@@ -9,31 +9,13 @@ jobs:
   add-to-project:
     name: Add issue to project
     runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
     steps:
-      - name: Get issue info
-        id: issue_info
-        uses: actions/github-script@v6
-        with:
-          script: |
-            const issue = await github.rest.issues.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-            return issue.data;
-      
       - name: Add issue to project
-        uses: actions/add-to-project@v0.5.0
+        uses: alex-page/github-project-automation-plus@v0.8.3
         with:
-          project-url: "https://github.com/users/dot-comma-hyphen/projects/1"
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          labeled: ""
-          label-operator: OR
-        
-      - name: Set status to "Todo"
-        uses: tzkb/actions-update-project-v2-item-field@v2
-        with:
-          project-id: "PVT_kwHODOjPH84BCnyB"
-          item-id: ${{ steps.issue_info.outputs.result.node_id }}
-          field-id: "PVTSSF_lAHODOjPH84BCnyBzg0x0Ns"
-          value: "f75ad846"
+          project: "Conduit-vite"
+          column: "Todo"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}

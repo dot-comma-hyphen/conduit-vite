@@ -9,36 +9,13 @@ jobs:
   update-project-status:
     name: Update project status to In Progress
     runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
     steps:
-      - name: Get linked issues
-        id: get_linked_issues
-        uses: actions/github-script@v6
+      - name: Update project status
+        uses: alex-page/github-project-automation-plus@v0.8.3
         with:
-          script: |
-            const query = `query($owner: String!, $repo: String!, $prNumber: Int!) {
-              repository(owner: $owner, name: $repo) {
-                pullRequest(number: $prNumber) {
-                  closingIssuesReferences(first: 10) {
-                    nodes {
-                      id
-                    }
-                  }
-                }
-              }
-            }`;
-            const variables = {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              prNumber: context.issue.number
-            };
-            const result = await github.graphql(query, variables);
-            return result.repository.pullRequest.closingIssuesReferences.nodes.map(issue => issue.id);
-
-      - name: Update status for each linked issue
-        if: steps.get_linked_issues.outputs.result != '[]'
-        uses: tzkb/actions-update-project-v2-item-field@v2
-        with:
-          project-id: "PVT_kwHODOjPH84BCnyB"
-          item-id: ${{ join(fromJson(steps.get_linked_issues.outputs.result), ',') }}
-          field-id: "PVTSSF_lAHODOjPH84BCnyBzg0x0Ns"
-          value: "47fc9ee4"
+          project: "Conduit-vite"
+          column: "In Progress"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
