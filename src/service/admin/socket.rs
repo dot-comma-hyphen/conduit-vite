@@ -9,8 +9,8 @@ pub struct Service {
 }
 
 impl Service {
-    pub fn build() -> Result<Arc<Self>> {
-        let path = services().globals.config.unix_socket_path.clone();
+    pub fn build(config: &crate::Config) -> Result<Arc<Self>> {
+        let path = config.unix_socket_path.clone();
         let listener = UnixListener::bind(path)?;
         Ok(Arc::new(Self {
             listener,

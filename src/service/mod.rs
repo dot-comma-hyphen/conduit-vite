@@ -118,7 +118,7 @@ impl Services {
             }),
             account_data: account_data::Service { db },
             admin: admin::Service::build(),
-            admin_socket: admin::socket::Service::build()?,
+            admin_socket: admin::socket::Service::build(&config)?,
             key_backups: key_backups::Service { db },
             media: Arc::new(media::Service { db }),
             sending: sending::Service::build(db, &config),
