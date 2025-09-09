@@ -193,6 +193,18 @@ impl service::users::Data for KeyValueDatabase {
         Ok(())
     }
 
+    /// Sets a new email or removes it if email is None.
+    fn set_email(&self, user_id: &UserId, email: Option<String>) -> Result<()> {
+        if let Some(email) = email {
+            self.userid_email
+                .insert(user_id.as_bytes(), email.as_bytes())?;
+        } else {
+            self.userid_email.remove(user_id.as_bytes())?;
+        }
+
+        Ok(())
+    }
+
     /// Adds a new device to a user.
     fn create_device(
         &self,

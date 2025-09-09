@@ -17,7 +17,10 @@ use url::Url;
 use crate::Error;
 
 mod proxy;
+mod ldap;
+
 use self::proxy::ProxyConfig;
+pub use self::ldap::LdapConfig;
 
 const SHA256_HEX_LENGTH: u8 = 64;
 
@@ -94,6 +97,9 @@ pub struct IncompleteConfig {
 
     pub emergency_password: Option<String>,
 
+    #[serde(default)]
+    pub ldap: LdapConfig,
+
     #[serde(flatten)]
     pub catchall: BTreeMap<String, IgnoredAny>,
 }
@@ -140,8 +146,66 @@ pub struct Config {
 
     pub emergency_password: Option<String>,
 
+    pub ldap: LdapConfig,
+
     pub catchall: BTreeMap<String, IgnoredAny>,
 }
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            address: default_address(),
+            port: default_port(),
+            tls: None,
+            server_name: "localhost".try_into().unwrap(),
+            database_backend: "rocksdb".to_owned(),
+            database_path: "/tmp/conduit_db/".to_owned(),
+            db_cache_capacity_mb: default_db_cache_capacity_mb(),
+            enable_lightning_bolt: true,
+            allow_check_for_updates: true,
+            conduit_cache_capacity_modifier: default_conduit_cache_capacity_modifier(),
+            rocksdb_max_open_files: default_rocksdb_max_open_files(),
+            pdu_cache_capacity: default_pdu_cache_capacity(),
+            cleanup_second_interval: default_cleanup_second_interval(),
+            max_request_size: default_max_request_size(),
+            max_concurrent_requests: default_max_concurrent_requests(),
+            max_fetch_prev_events: default_max_fetch_prev_events(),
+            allow_registration: false,
+            registration_token: None,
+            openid_token_ttl: default_openid_token_ttl(),
+            allow_encryption: true,
+            allow_federation: false,
+            allow_room_creation: true,
+            allow_unstable_room_versions: true,
+            default_room_version: default_default_room_version(),
+            well_known: WellKnownConfig {
+                client: "https://localhost".to_owned(),
+                server: "localhost".try_into().unwrap(),
+            },
+            allow_jaeger: false,
+            tracing_flame: false,
+            proxy: ProxyConfig::default(),
+            jwt_secret: None,
+            trusted_servers: default_trusted_servers(),
+            log: default_log(),
+            turn: None,
+            media: MediaConfig {
+                backend: MediaBackendConfig::FileSystem {
+                    path: "/tmp/conduit_media".to_owned(),
+                    directory_structure: DirectoryStructure::default(),
+                },
+                retention: MediaRetentionConfig {
+                    scoped: HashMap::new(),
+                    global_space: None,
+                },
+            },
+            emergency_password: None,
+            ldap: LdapConfig::default(),
+            catchall: BTreeMap::new(),
+        }
+    }
+}
+
 
 impl From<IncompleteConfig> for Config {
     fn from(val: IncompleteConfig) -> Self {
@@ -185,6 +249,7 @@ impl From<IncompleteConfig> for Config {
             turn,
             media,
             emergency_password,
+            ldap,
             catchall,
         } = val;
 
@@ -282,6 +347,7 @@ impl From<IncompleteConfig> for Config {
             turn,
             media,
             emergency_password,
+            ldap,
             catchall,
         }
     }

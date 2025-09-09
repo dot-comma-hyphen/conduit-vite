@@ -1,0 +1,57 @@
+name: Auto Update Status - Done
+
+on:
+  pull_request:
+    types:
+      - closed
+  issues:
+    types:
+      - closed
+
+jobs:
+  update-project-status:
+    name: Update project status to Done
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get issue info
+        id: issue_info
+        uses: actions/github-script@v6
+        with:
+          script: |
+            if (context.eventName === 'pull_request' && context.payload.pull_request.merged) {
+              const query = `query($owner: String!, $repo: String!, $prNumber: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $prNumber) {
+                    closingIssuesReferences(first: 10) {
+                      nodes {
+                        id
+                      }
+                    }
+                  }
+                }
+              }`;
+              const variables = {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                prNumber: context.issue.number
+              };
+              const result = await github.graphql(query, variables);
+              return result.repository.pullRequest.closingIssuesReferences.nodes.map(issue => issue.id);
+            } else if (context.eventName === 'issues') {
+              const issue = await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+              });
+              return [issue.data.node_id];
+            }
+            return [];
+
+      - name: Update status to "Done"
+        if: steps.issue_info.outputs.result != '[]'
+        uses: tzkb/actions-update-project-v2-item-field@v2
+        with:
+          project-id: "PVT_kwHODOjPH84BCnyB"
+          item-id: ${{ join(fromJson(steps.issue_info.outputs.result), ',') }}
+          field-id: "PVTSSF_lAHODOjPH84BCnyBzg0x0Ns"
+          value: "98236657"

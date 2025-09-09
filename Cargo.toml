@@ -27,6 +27,7 @@ rust-version = "1.85.0"
 workspace = true
 
 [dependencies]
+ldap3 = { version = "0.12.0-beta.2", default-features = false, features = ["sync", "tls-rustls-ring"] }
 # Web framework
 axum = { version = "0.8", default-features = false, features = [
   "form",
@@ -34,6 +35,8 @@ axum = { version = "0.8", default-features = false, features = [
   "http2",
   "json",
   "matched-path",
+  "query",
+  "tokio",
 ], optional = true }
 axum-extra = { version = "0.10", features = ["typed-header"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
@@ -232,9 +235,8 @@ assets = [
 conf-files = ["/etc/matrix-conduit/conduit.toml"]
 copyright = "2020, Timo Kösters <timo@koesters.xyz>"
 depends = "$auto, ca-certificates"
-extended-description = """\
-A fast Matrix homeserver that is optimized for smaller, personal servers, \
-instead of a server that has high scalability."""
+extended-description = """
+A fast Matrix homeserver that is optimized for smaller, personal servers, \ninstead of a server that has high scalability."""
 license-file = ["LICENSE", "3"]
 maintainer = "Paul van Tilburg <paul@luon.net>"
 maintainer-scripts = "debian/"
@@ -242,6 +244,13 @@ name = "matrix-conduit"
 priority = "optional"
 section = "net"
 systemd-units = { unit-name = "matrix-conduit" }
+
+[dev-dependencies]
+reqwest = { version = "0.12.4", features = ["json"] }
+once_cell = "1.19.0"
+tokio = { version = "1.47.1", features = ["full"] }
+serde_json = "1.0.140"
+tempfile = "3.10.1"
 
 [profile.dev]
 incremental = true

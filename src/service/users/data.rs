@@ -54,6 +54,9 @@ pub trait Data: Send + Sync {
     /// Sets a new avatar_url or removes it if avatar_url is None.
     fn set_blurhash(&self, user_id: &UserId, blurhash: Option<String>) -> Result<()>;
 
+    /// Sets a new email or removes it if email is None.
+    fn set_email(&self, user_id: &UserId, email: Option<String>) -> Result<()>;
+
     /// Adds a new device to a user.
     fn create_device(
         &self,

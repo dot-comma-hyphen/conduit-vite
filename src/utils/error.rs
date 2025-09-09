@@ -83,6 +83,8 @@ pub enum Error {
     RedactionError(OwnedServerName, ruma::canonical_json::RedactionError),
     #[error("{0} in {1}")]
     InconsistentRoomState(&'static str, ruma::OwnedRoomId),
+    #[error("Ldap error: {0}")]
+    LdapError(#[from] ldap3::LdapError),
 }
 
 impl Error {

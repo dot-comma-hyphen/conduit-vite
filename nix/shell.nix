@@ -9,6 +9,7 @@
 , mdbook
 , mkShell
 , olm
+, pkgs
 , system
 , taplo
 , toolchain
@@ -61,5 +62,7 @@ mkShell {
 
     # Useful for editing the book locally
     mdbook
+    pkgs.openssl
+    pkgs.gcc
   ] ++ default.nativeBuildInputs ;
 }

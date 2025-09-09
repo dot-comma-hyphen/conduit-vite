@@ -13,6 +13,7 @@ pub mod admin;
 pub mod appservice;
 pub mod globals;
 pub mod key_backups;
+pub mod ldap;
 pub mod media;
 pub mod pdu;
 pub mod pusher;
@@ -36,6 +37,7 @@ pub struct Services {
     pub media: Arc<media::Service>,
     pub sending: Arc<sending::Service>,
     pub typing: tokio::task::JoinHandle<()>,
+    pub ldap: ldap::Service,
 }
 
 impl Services {
@@ -121,6 +123,7 @@ impl Services {
             typing: tokio::spawn(
                 rooms::edus::typing::Service::typings_maintain_task()
             ),
+            ldap: ldap::Service::build()?,
 
             globals: globals::Service::load(db, config)?,
         })

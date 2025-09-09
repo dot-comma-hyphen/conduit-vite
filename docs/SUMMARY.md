@@ -3,6 +3,7 @@
 - [Introduction](introduction.md)
 
 - [Configuration](configuration.md)
+- [LDAP](ldap.md)
 - [Delegation](delegation.md)
 - [Deploying](deploying.md)
     - [Generic](deploying/generic.md)
