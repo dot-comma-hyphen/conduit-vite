@@ -22,7 +22,7 @@ fn main() {
     tracing_subscriber::fmt::init();
 
     let config: Config = Figment::new()
-        .merge(Toml::file(Env::var("CONDUIT_CONFIG").unwrap_or_else(|_| {
+        .merge(Toml::file(Env::var("CONDUIT_CONFIG").unwrap_or_else(| | {
             error!("CONDUIT_CONFIG env var not set");
             std::process::exit(1);
         })))

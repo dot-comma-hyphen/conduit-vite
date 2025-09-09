@@ -27,9 +27,6 @@ rust-version = "1.85.0"
 workspace = true
 
 [dependencies]
-tracing = "0.1"
-tracing-subscriber = "0.3"
-figment = { version = "0.10", features = ["env", "toml"] }
 ldap3 = { version = "0.12.0-beta.2", default-features = false, features = ["sync", "tls-rustls-ring"] }
 # Web framework
 axum = { version = "0.8", default-features = false, features = [
