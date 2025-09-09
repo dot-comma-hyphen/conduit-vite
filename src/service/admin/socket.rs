@@ -31,7 +31,7 @@ impl Service {
                     self.handle_connection(stream).await;
                 }
                 Err(e) => {
-                    // Handle error
+                    tracing::error!("Failed to accept admin socket connection: {}", e);
                 }
             }
         }
@@ -39,15 +39,34 @@ impl Service {
 
     async fn handle_connection(&self, mut stream: UnixStream) {
         let mut buffer = Vec::new();
-        stream.read_to_end(&mut buffer).await.unwrap();
+        if let Err(e) = stream.read_to_end(&mut buffer).await {
+            tracing::error!("Failed to read from admin socket: {}", e);
+            return;
+        }
 
         let command_str = String::from_utf8_lossy(&buffer);
-        let mut argv = shell_words::split(&command_str).unwrap();
+        let mut lines = command_str.lines();
+        let command_line = lines.next().unwrap_or("");
+        let body = lines.collect::<Vec<&str>>();
+
+        let mut argv = match shell_words::split(command_line) {
+            Ok(argv) => argv,
+            Err(e) => {
+                tracing::error!("Failed to parse admin command: {}", e);
+                return;
+            }
+        };
         argv.insert(0, "conduit-admin".to_string());
 
-        let admin_command = AdminCommand::try_parse_from(&argv).unwrap();
+        let admin_command = match AdminCommand::try_parse_from(&argv) {
+            Ok(command) => command,
+            Err(e) => {
+                tracing::error!("Failed to parse admin command: {}", e);
+                return;
+            }
+        };
 
-        let result = services().admin.process_admin_command(admin_command, Vec::new()).await;
+        let result = services().admin.process_admin_command(admin_command, body).await;
 
         let response = match result {
             Ok(message) => {

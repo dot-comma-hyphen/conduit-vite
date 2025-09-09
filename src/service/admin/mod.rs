@@ -55,7 +55,7 @@ use super::{
     },
     pdu::PduBuilder,
 };
-use command::{AdminCommand, ListMediaArgs};
+use command::{AdminCommand, DeactivatePurgeMediaArgs, ListMediaArgs};
 
 pub mod command;
 

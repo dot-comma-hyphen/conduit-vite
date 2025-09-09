@@ -74,3 +74,24 @@ address = "127.0.0.1" # This makes sure Conduit can only be reached using the re
 # If you want to override these defaults, uncomment and edit the following lines accordingly:
 #server = your.server.name:443
 #client = https://your.server.name
+
+# =============================================================================
+# TURN server settings for VoIP
+# =============================================================================
+[turn]
+# Uncomment and configure the following lines to enable a TURN server for Element Call.
+# You can use either a shared secret (for temporary credentials) or a static username/password.
+
+# A list of URIs for the TURN server.
+#uris = ["turn:your.turn.server:3478?transport=udp", "turn:your.turn.server:3478?transport=tcp"]
+
+# The time-to-live (TTL) for the generated credentials, in seconds.
+#ttl = 3600
+
+# Option 1: Shared secret for generating temporary credentials.
+# The username will be in the format "<expiry_timestamp>:<user_id>"
+#secret = "your-super-secret-turn-key"
+
+# Option 2: Static username and password.
+#username = "your-turn-username"
+#password = "your-turn-password"
