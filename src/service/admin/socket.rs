@@ -61,7 +61,11 @@ impl Service {
         let admin_command = match AdminCommand::try_parse_from(&argv) {
             Ok(command) => command,
             Err(e) => {
-                tracing::error!("Failed to parse admin command: {}", e);
+                if e.kind() == clap::error::ErrorKind::DisplayHelp {
+                    let _ = stream.write_all(e.to_string().as_bytes()).await;
+                } else {
+                    tracing::error!("Failed to parse admin command: {}", e);
+                }
                 return;
             }
         };
