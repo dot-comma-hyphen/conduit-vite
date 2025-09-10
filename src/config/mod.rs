@@ -35,6 +35,7 @@ pub struct IncompleteConfig {
     pub server_name: OwnedServerName,
     pub database_backend: String,
     pub database_path: String,
+    pub unix_socket_path: String,
     #[serde(default = "default_db_cache_capacity_mb")]
     pub db_cache_capacity_mb: f64,
     #[serde(default = "true_fn")]
@@ -114,6 +115,7 @@ pub struct Config {
     pub server_name: OwnedServerName,
     pub database_backend: String,
     pub database_path: String,
+    pub unix_socket_path: String,
     pub db_cache_capacity_mb: f64,
     pub enable_lightning_bolt: bool,
     pub allow_check_for_updates: bool,
@@ -160,6 +162,7 @@ impl Default for Config {
             server_name: "localhost".try_into().unwrap(),
             database_backend: "rocksdb".to_owned(),
             database_path: "/tmp/conduit_db/".to_owned(),
+            unix_socket_path: "/tmp/conduit_db/admin.sock".to_owned(),
             db_cache_capacity_mb: default_db_cache_capacity_mb(),
             enable_lightning_bolt: true,
             allow_check_for_updates: true,
@@ -251,6 +254,7 @@ impl From<IncompleteConfig> for Config {
             emergency_password,
             ldap,
             catchall,
+            ref unix_socket_path,
         } = val;
 
         let turn = turn.or_else(|| {
@@ -312,6 +316,14 @@ impl From<IncompleteConfig> for Config {
             retention: media.retention.into(),
         };
 
+        let unix_socket_path = if val.unix_socket_path.is_empty() {
+            let mut path = PathBuf::from(&database_path);
+            path.push("admin.sock");
+            path.into_os_string().into_string().unwrap()
+        } else {
+            val.unix_socket_path
+        };
+
         Config {
             address,
             port,
@@ -319,6 +331,7 @@ impl From<IncompleteConfig> for Config {
             server_name,
             database_backend,
             database_path,
+            unix_socket_path,
             db_cache_capacity_mb,
             enable_lightning_bolt,
             allow_check_for_updates,

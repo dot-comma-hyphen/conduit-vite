@@ -1,0 +1,8 @@
+[global]
+server_name = "localhost"
+database_backend = "sqlite"
+database_path = "/tmp/conduit_db_test"
+port = 6167
+allow_registration = true
+allow_federation = false
+unix_socket_path = "/tmp/conduit_db_test/admin.sock"
