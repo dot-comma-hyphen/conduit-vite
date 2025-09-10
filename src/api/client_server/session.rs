@@ -153,7 +153,6 @@ pub async fn login_route(body: Ruma<login::v3::Request>) -> Result<login::v3::Re
         }
     }
 
-
     // Generate new device id if the user didn't specify one
     let device_id = body
         .device_id
@@ -221,7 +220,9 @@ async fn authenticate_user(user_id: &UserId, password: &str) -> Result<()> {
                                 services()
                                     .users
                                     .set_displayname(&user_id_clone, Some(ldap_user.displayname))?;
-                                services().users.set_email(&user_id_clone, Some(ldap_user.email))?;
+                                services()
+                                    .users
+                                    .set_email(&user_id_clone, Some(ldap_user.email))?;
                             }
                             return Ok(());
                         }
@@ -284,7 +285,6 @@ async fn authenticate_user(user_id: &UserId, password: &str) -> Result<()> {
 
     Ok(())
 }
-
 
 /// # `POST /_matrix/client/r0/logout`
 ///

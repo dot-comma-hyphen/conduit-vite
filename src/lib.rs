@@ -299,4 +299,3 @@ fn method_to_filter(method: Method) -> axum::routing::MethodFilter {
         m => panic!("Unsupported HTTP method: {m:?}"),
     }
 }
-

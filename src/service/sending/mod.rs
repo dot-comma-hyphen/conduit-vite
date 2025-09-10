@@ -17,7 +17,6 @@ use crate::{
 };
 use federation::transactions::send_transaction_message;
 
-
 use base64::{engine::general_purpose, Engine as _};
 
 use ruma::{
@@ -97,8 +96,6 @@ pub struct Service {
     receiver: Mutex<mpsc::UnboundedReceiver<(OutgoingKind, SendingEventType, Vec<u8>)>>,
 }
 
-
-
 impl Service {
     pub fn build(db: &'static dyn Data, config: &Config) -> Arc<Self> {
         let (sender, receiver) = mpsc::unbounded_channel();
@@ -173,10 +170,7 @@ impl Service {
                 .insert(outgoing_kind.clone());
 
             self.worker(outgoing_kind.clone()).await;
-            running_destinations
-                .lock()
-                .await
-                .remove(&outgoing_kind);
+            running_destinations.lock().await.remove(&outgoing_kind);
         });
     }
 
@@ -245,14 +239,17 @@ impl Service {
         }
     }
 
-    
-
     #[tracing::instrument(skip(self, server_name))]
     pub async fn select_edus(&self, server_name: &ServerName) -> Result<Vec<Edu>> {
         let mut events = Vec::new();
         let mut device_list_changes = HashSet::new();
 
-        'outer: for room_id in services().rooms.state_cache.server_rooms(server_name).collect::<Result<Vec<_>>>()? {
+        'outer: for room_id in services()
+            .rooms
+            .state_cache
+            .server_rooms(server_name)
+            .collect::<Result<Vec<_>>>()?
+        {
             // Look for device list updates in this room
             device_list_changes.extend(
                 services()
@@ -273,7 +270,6 @@ impl Service {
                     }));
                 }
             }
-
 
             // Look for read receipts in this room
             for r in services()
@@ -336,7 +332,12 @@ impl Service {
             }
         }
 
-        if let Some(stopped_typing) = self.federation_typers_stop.write().await.remove(server_name) {
+        if let Some(stopped_typing) = self
+            .federation_typers_stop
+            .write()
+            .await
+            .remove(server_name)
+        {
             for (room_id, users) in stopped_typing {
                 for user_id in users {
                     events.push(Edu::Typing(federation::transactions::edu::TypingContent {
@@ -764,8 +765,6 @@ impl Service {
 
         Ok(servers)
     }
-
-    
 
     #[tracing::instrument(skip(self, user_id, room_id, event))]
     pub fn send_federation_receipt_edu(

@@ -197,7 +197,12 @@ async fn sync_helper(
     // Setup watchers, so if there's no response, we can wait for them
     loop {
         let watcher = services().globals.watch(&sender_user, &sender_device);
-        let mut typing_receiver = services().rooms.edus.typing.typing_update_sender.subscribe();
+        let mut typing_receiver = services()
+            .rooms
+            .edus
+            .typing
+            .typing_update_sender
+            .subscribe();
 
         // Load filter
         let filter = match body.filter.clone() {
@@ -422,10 +427,10 @@ async fn sync_helper(
                 .state_full_ids(left_shortstatehash)
                 .await?;
 
-            let leave_shortstatekey = services().rooms.short.get_or_create_shortstatekey(
-                &StateEventType::RoomMember,
-                sender_user.as_str(),
-            )?;
+            let leave_shortstatekey = services()
+                .rooms
+                .short
+                .get_or_create_shortstatekey(&StateEventType::RoomMember, sender_user.as_str())?;
 
             left_state_ids.insert(leave_shortstatekey, left_event_id);
 
@@ -1308,7 +1313,6 @@ fn share_encrypted_room(
         })
         .any(|encrypted| encrypted))
 }
-
 
 pub async fn sync_events_v5_route(
     body: Ruma<sync_events::v5::Request>,

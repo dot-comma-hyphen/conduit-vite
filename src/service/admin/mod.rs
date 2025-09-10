@@ -205,7 +205,8 @@ impl Service {
         for prefix in &prefixes {
             if command_line.starts_with(prefix) {
                 let command_part = command_line.strip_prefix(prefix).unwrap().trim_start();
-                processed_command = Some(format!("{} {}", format!("{conduit_user}:"), command_part));
+                processed_command =
+                    Some(format!("{} {}", format!("{conduit_user}:"), command_part));
                 break;
             }
         }
@@ -293,15 +294,13 @@ impl Service {
                 );
                 RoomMessageEventContent::text_plain(output).into()
             }
-			AdminCommand::RoomInfo { room_id_or_alias } => {
+            AdminCommand::RoomInfo { room_id_or_alias } => {
                 let room_id = if room_id_or_alias.starts_with('!') {
-                    RoomId::parse(&room_id_or_alias).map_err(|_| {
-                        Error::AdminCommand("Invalid room ID")
-                    })?
+                    RoomId::parse(&room_id_or_alias)
+                        .map_err(|_| Error::AdminCommand("Invalid room ID"))?
                 } else if room_id_or_alias.starts_with('#') {
-                    let alias = RoomAliasId::parse(&room_id_or_alias).map_err(|_| {
-                        Error::AdminCommand("Invalid room alias")
-                    })?;
+                    let alias = RoomAliasId::parse(&room_id_or_alias)
+                        .map_err(|_| Error::AdminCommand("Invalid room alias"))?;
                     services()
                         .rooms
                         .alias
@@ -314,12 +313,13 @@ impl Service {
                 };
 
                 if !services().rooms.metadata.exists(&room_id)? {
-                    return Ok(
-                        RoomMessageEventContent::text_plain("Room not found.").into(),
-                    );
+                    return Ok(RoomMessageEventContent::text_plain("Room not found.").into());
                 }
 
-                let shortstatehash = services().rooms.state.get_room_shortstatehash(&room_id)?
+                let shortstatehash = services()
+                    .rooms
+                    .state
+                    .get_room_shortstatehash(&room_id)?
                     .ok_or_else(|| Error::bad_database("Room has no state"))?;
 
                 let mut message = format!("Room Information for: {}\n", &room_id_or_alias);
@@ -331,8 +331,9 @@ impl Service {
                     &ruma::events::StateEventType::RoomCanonicalAlias,
                     "",
                 )? {
-                    let content = serde_json::from_str::<RoomCanonicalAliasEventContent>(event.content.get())
-                        .map_err(|_| Error::bad_database("Invalid canonical alias event"))?;
+                    let content =
+                        serde_json::from_str::<RoomCanonicalAliasEventContent>(event.content.get())
+                            .map_err(|_| Error::bad_database("Invalid canonical alias event"))?;
                     if let Some(alias) = content.alias {
                         message.push_str(&format!("Canonical Alias: {}\n", alias));
                     }
@@ -340,7 +341,6 @@ impl Service {
                         message.push_str(&format!("Aliases: {:?}\n", content.alt_aliases));
                     }
                 }
-
 
                 if let Some(event) = services().rooms.state_accessor.state_get(
                     shortstatehash,
@@ -357,8 +357,9 @@ impl Service {
                     &ruma::events::StateEventType::RoomTopic,
                     "",
                 )? {
-                    let content = serde_json::from_str::<RoomTopicEventContent>(event.content.get())
-                        .map_err(|_| Error::bad_database("Invalid room topic event"))?;
+                    let content =
+                        serde_json::from_str::<RoomTopicEventContent>(event.content.get())
+                            .map_err(|_| Error::bad_database("Invalid room topic event"))?;
                     message.push_str(&format!("Topic: {}\n", content.topic));
                 }
 
@@ -367,8 +368,10 @@ impl Service {
                     &ruma::events::StateEventType::RoomAvatar,
                     "",
                 )? {
-                    let content = serde_json::from_str::<ruma::events::room::avatar::RoomAvatarEventContent>(event.content.get())
-                        .map_err(|_| Error::bad_database("Invalid room avatar event"))?;
+                    let content = serde_json::from_str::<
+                        ruma::events::room::avatar::RoomAvatarEventContent,
+                    >(event.content.get())
+                    .map_err(|_| Error::bad_database("Invalid room avatar event"))?;
                     if let Some(url) = content.url {
                         message.push_str(&format!("Avatar URL: {}\n", url));
                     }
@@ -382,8 +385,9 @@ impl Service {
                     &ruma::events::StateEventType::RoomJoinRules,
                     "",
                 )? {
-                    let content = serde_json::from_str::<RoomJoinRulesEventContent>(event.content.get())
-                        .map_err(|_| Error::bad_database("Invalid join rules event"))?;
+                    let content =
+                        serde_json::from_str::<RoomJoinRulesEventContent>(event.content.get())
+                            .map_err(|_| Error::bad_database("Invalid join rules event"))?;
                     let join_rule_str = match content.join_rule {
                         JoinRule::Public => "Public",
                         JoinRule::Knock => "Knock",
@@ -401,8 +405,10 @@ impl Service {
                     &ruma::events::StateEventType::RoomHistoryVisibility,
                     "",
                 )? {
-                    let content = serde_json::from_str::<RoomHistoryVisibilityEventContent>(event.content.get())
-                        .map_err(|_| Error::bad_database("Invalid history visibility event"))?;
+                    let content = serde_json::from_str::<RoomHistoryVisibilityEventContent>(
+                        event.content.get(),
+                    )
+                    .map_err(|_| Error::bad_database("Invalid history visibility event"))?;
                     let history_visibility_str = match content.history_visibility {
                         HistoryVisibility::Invited => "Invited",
                         HistoryVisibility::Joined => "Joined",
@@ -410,10 +416,7 @@ impl Service {
                         HistoryVisibility::WorldReadable => "WorldReadable",
                         _ => "Custom",
                     };
-                    message.push_str(&format!(
-                        "- Visibility: {}\n",
-                        history_visibility_str
-                    ));
+                    message.push_str(&format!("- Visibility: {}\n", history_visibility_str));
                 }
 
                 if let Some(_event) = services().rooms.state_accessor.state_get(
@@ -428,18 +431,20 @@ impl Service {
 
                 message.push_str("---------------------------------\n");
 
-                let members: Vec<ruma::OwnedUserId> = services().rooms.state_cache.room_members(&room_id).filter_map(Result::ok).collect();
-                let power_levels = services()
+                let members: Vec<ruma::OwnedUserId> = services()
                     .rooms
-                    .state_accessor
-                    .power_levels(&room_id)?;
+                    .state_cache
+                    .room_members(&room_id)
+                    .filter_map(Result::ok)
+                    .collect();
+                let power_levels = services().rooms.state_accessor.power_levels(&room_id)?;
 
                 message.push_str(&format!("Members (Count: {}):\n", members.len()));
                 for user_id in members {
-                    let power_level = power_levels.users.get(&user_id).map_or(
-                        power_levels.users_default,
-                        |p| *p,
-                    );
+                    let power_level = power_levels
+                        .users
+                        .get(&user_id)
+                        .map_or(power_levels.users_default, |p| *p);
                     message.push_str(&format!("- {} (Power Level: {})\n", user_id, power_level));
                 }
 

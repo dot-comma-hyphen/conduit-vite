@@ -16,11 +16,11 @@ use url::Url;
 
 use crate::Error;
 
-mod proxy;
 mod ldap;
+mod proxy;
 
-use self::proxy::ProxyConfig;
 pub use self::ldap::LdapConfig;
+use self::proxy::ProxyConfig;
 
 const SHA256_HEX_LENGTH: u8 = 64;
 
@@ -208,7 +208,6 @@ impl Default for Config {
         }
     }
 }
-
 
 impl From<IncompleteConfig> for Config {
     fn from(val: IncompleteConfig) -> Self {

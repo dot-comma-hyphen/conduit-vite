@@ -1,4 +1,4 @@
-use crate::{Result, services};
+use crate::{services, Result};
 use ldap3::{LdapConn, Scope, SearchEntry};
 use tokio::task::spawn_blocking;
 
@@ -63,7 +63,9 @@ impl Service {
                 .attrs
                 .get(displayname_attr)
                 .and_then(|vals| vals.get(0))
-                .ok_or_else(|| crate::Error::bad_config("LDAP attribute for displayname not found"))?
+                .ok_or_else(|| {
+                    crate::Error::bad_config("LDAP attribute for displayname not found")
+                })?
                 .to_owned();
 
             let email = entry

@@ -110,7 +110,8 @@ async fn main() {
         info!("Attempting to connect to LDAP server");
         match ldap3::LdapConn::new(&config.ldap.uri) {
             Ok(mut ldap) => {
-                ldap.simple_bind(&config.ldap.bind_dn, &config.ldap.bind_password).unwrap();
+                ldap.simple_bind(&config.ldap.bind_dn, &config.ldap.bind_password)
+                    .unwrap();
                 match ldap.simple_bind(&config.ldap.bind_dn, &config.ldap.bind_password) {
                     Ok(_) => {
                         info!("Successfully connected and bound to LDAP server");
@@ -325,8 +326,6 @@ async fn unrecognized_method(
     }
     Ok(inner)
 }
-
-
 
 async fn shutdown_signal(handle: ServerHandle) {
     let ctrl_c = async {

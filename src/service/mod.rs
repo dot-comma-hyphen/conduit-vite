@@ -122,9 +122,7 @@ impl Services {
             key_backups: key_backups::Service { db },
             media: Arc::new(media::Service { db }),
             sending: sending::Service::build(db, &config),
-            typing: tokio::spawn(
-                rooms::edus::typing::Service::typings_maintain_task()
-            ),
+            typing: tokio::spawn(rooms::edus::typing::Service::typings_maintain_task()),
             ldap: ldap::Service::build()?,
 
             globals: globals::Service::load(db, config)?,
